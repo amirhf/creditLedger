@@ -2,10 +2,10 @@ import { z } from 'zod';
 export declare class TransfersController {
     create(body: any): Promise<{
         error: z.typeToFlattenedError<{
-            currency?: string;
             from?: string;
             to?: string;
             amount?: number;
+            currency?: string;
             idempotencyKey?: string;
         }, string>;
         accepted?: undefined;
