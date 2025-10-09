@@ -1,0 +1,10 @@
+version: v2
+plugins:
+  - plugin: buf.build/protocolbuffers/go
+    out: proto/gen/go
+  - plugin: buf.build/grpc/go
+    out: proto/gen/go
+  - plugin: buf.build/bufbuild/validate-go
+    out: proto/gen/go
+  - plugin: buf.build/bufbuild/connect-es
+    out: proto/gen/ts

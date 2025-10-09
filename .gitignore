@@ -1,0 +1,20 @@
+# general
+.DS_Store
+node_modules
+coverage
+.env
+
+
+# go
+bin
+*.test
+*.out
+
+
+# generated
+proto/gen
+**/sqlc/**/gen.go
+
+
+# docker
+deploy/data/

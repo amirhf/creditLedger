@@ -1,0 +1,24 @@
+name: ci
+on: [push, pull_request]
+
+
+jobs:
+  build-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with: { go-version: '1.22' }
+      - name: Go build & test
+        run: |
+          go version
+          go work sync || true
+          go build ./...
+          go test ./...
+      - uses: actions/setup-node@v4
+        with: { node-version: '20' }
+      - name: Gateway build
+        run: |
+          cd services/gateway
+          npm ci
+          npm run build

@@ -1,0 +1,26 @@
+syntax = "proto3";
+package ledger.v1;
+option go_package = "github.com/you/credit-ledger/proto/gen/go/ledger/v1;ledgerv1";
+
+
+message Money { int64 units = 1; string currency = 2; }
+
+
+enum Side { SIDE_UNSPECIFIED = 0; DEBIT = 1; CREDIT = 2; }
+
+
+message AccountCreated { string account_id = 1; string currency = 2; int64 ts_unix_ms = 3; }
+
+
+message EntryLine { string account_id = 1; Money amount = 2; Side side = 3; }
+message EntryPosted {
+  string entry_id = 1;
+  string batch_id = 2;
+  repeated EntryLine lines = 3;
+  int64 ts_unix_ms = 4;
+}
+
+
+message TransferInitiated { string transfer_id = 1; string from = 2; string to = 3; Money amount = 4; string idem_key = 5; int64 ts_unix_ms = 6; }
+message TransferCompleted { string transfer_id = 1; int64 ts_unix_ms = 2; }
+message TransferFailed { string transfer_id = 1; string reason = 2; int64 ts_unix_ms = 3; }

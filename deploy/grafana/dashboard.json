@@ -1,0 +1,9 @@
+{
+  "dashboard": {
+    "title": "Credit Ledger – Ops",
+    "panels": [
+      {"type":"graph","title":"Outbox Age (ms)","targets":[{"expr":"histogram_quantile(0.95, sum(rate(outbox_latency_bucket[5m])) by (le))"}]},
+      {"type":"graph","title":"Kafka Consumer Lag","targets":[{"expr":"kafka_consumer_lag"}]}
+    ]
+  }
+}
