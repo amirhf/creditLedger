@@ -1,0 +1,2 @@
+-- Placeholder query file
+-- Add your SQL queries here when schema is ready

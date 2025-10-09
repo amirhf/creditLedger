@@ -1,0 +1,10 @@
+version: v2
+plugins:
+  - remote: buf.build/protocolbuffers/go
+    out: proto/gen/go
+  - remote: buf.build/grpc/go
+    out: proto/gen/go
+  - remote: buf.build/bufbuild/validate-go
+    out: proto/gen/go
+  - remote: buf.build/bufbuild/connect-es
+    out: proto/gen/ts
