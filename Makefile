@@ -1,20 +1,23 @@
 SHELL := /bin/bash
+COMPOSE := docker compose -f deploy/docker-compose.yml
 
 
-.PHONY: up down build gen proto sqlc test
-
+.PHONY: up down build gen proto sqlc test logs services-up services-down \
+docker-build docker-push run-accounts run-ledger run-orchestrator run-readmodel run-gateway run-all
 
 up:
-	docker compose -f deploy/docker-compose.yml up -d --build
+	$(COMPOSE) up -d --build
 	docker ps
 
+services-up:
+	$(COMPOSE) up -d --build accounts ledger-svc orchestrator read-model gateway
 
-e2e-logs:
-	docker compose -f deploy/docker-compose.yml logs -f --tail=200
+logs:
+	$(COMPOSE) logs -f --tail=200
 
 
 down:
-	docker compose -f deploy/docker-compose.yml down -v
+	$(COMPOSE) down -v
 
 
 build:
@@ -37,3 +40,33 @@ sqlc:
 
 test:
 	go test ./...
+
+
+# Build all images
+docker-build:
+	$(COMPOSE) build accounts ledger-svc orchestrator read-model gateway
+
+
+# Run single services locally with Go/Node (useful for rapid dev without Docker)
+run-accounts:
+	cd services/accounts && go run ./cmd/accounts
+
+
+run-ledger:
+	cd services/ledger && go run ./cmd/ledger
+
+
+run-orchestrator:
+	cd services/posting-orchestrator && go run ./cmd/orchestrator
+
+
+run-readmodel:
+	cd services/read-model && go run ./cmd/readmodel
+
+
+run-gateway:
+	cd services/gateway && npm start
+
+
+# Start everything (infra + services)
+run-all: up services-up logs

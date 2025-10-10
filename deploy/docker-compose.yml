@@ -85,3 +85,50 @@ services:
       GF_SECURITY_ADMIN_PASSWORD: admin
     volumes:
       - ./grafana/dashboards.json:/var/lib/grafana/dashboards/dashboards.json
+
+  accounts:
+    build: ../services/accounts
+    environment:
+      PORT: 7101
+      DATABASE_URL: postgres://ledger:${POSTGRES_PASSWORD:-ledgerpw}@postgres-accounts:5432/${POSTGRES_DB_ACCOUNTS:-accounts}?sslmode=disable
+    depends_on: [postgres-accounts]
+    ports: ["7101:7101"]
+
+
+  ledger-svc:
+    build: ../services/ledger
+    environment:
+      PORT: 7102
+      DATABASE_URL: postgres://ledger:${POSTGRES_PASSWORD:-ledgerpw}@postgres-ledger:5432/${POSTGRES_DB_LEDGER:-ledger}?sslmode=disable
+      KAFKA_BROKERS: redpanda:9092
+    depends_on: [postgres-ledger, redpanda]
+    ports: ["7102:7102"]
+
+
+  orchestrator:
+    build: ../services/posting-orchestrator
+    environment:
+      PORT: 7103
+      REDIS_URL: redis://redis:6379
+      LEDGER_URL: http://ledger-svc:7102
+    depends_on: [redis, ledger-svc]
+    ports: ["7103:7103"]
+
+
+  read-model:
+    build: ../services/read-model
+    environment:
+      PORT: 7104
+      DATABASE_URL: postgres://ledger:${POSTGRES_PASSWORD:-ledgerpw}@postgres-readmodel:5432/${POSTGRES_DB_READMODEL:-readmodel}?sslmode=disable
+      KAFKA_BROKERS: redpanda:9092
+    depends_on: [postgres-readmodel, redpanda]
+    ports: ["7104:7104"]
+
+
+  gateway:
+    build: ../services/gateway
+    environment:
+      PORT: 4000
+      ORCHESTRATOR_URL: http://orchestrator:7103
+    depends_on: [orchestrator]
+    ports: ["4000:4000"]

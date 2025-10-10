@@ -4,7 +4,11 @@ go 1.24
 
 require (
 	github.com/go-chi/chi/v5 v5.1.0
+	github.com/google/uuid v1.6.0
+	github.com/lib/pq v1.10.9
 	github.com/prometheus/client_golang v1.19.1
+	github.com/segmentio/kafka-go v0.4.47
+	google.golang.org/protobuf v1.36.3
 )
 
 require (
@@ -14,5 +18,4 @@ require (
 	github.com/prometheus/common v0.48.0 // indirect
 	github.com/prometheus/procfs v0.12.0 // indirect
 	golang.org/x/sys v0.17.0 // indirect
-	google.golang.org/protobuf v1.33.0 // indirect
 )

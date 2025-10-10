@@ -1,6 +1,6 @@
 syntax = "proto3";
 package ledger.v1;
-option go_package = "github.com/you/credit-ledger/proto/gen/go/ledger/v1;ledgerv1";
+option go_package = "ledger/v1;ledgerv1";
 
 
 message Money { int64 units = 1; string currency = 2; }
