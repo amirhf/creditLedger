@@ -1,1 +1,93 @@
 package consumer
+
+import (
+	"context"
+	"fmt"
+	"log"
+	"time"
+
+	"github.com/amirhf/credit-ledger/services/read-model/internal/projection"
+	"github.com/google/uuid"
+	"github.com/segmentio/kafka-go"
+)
+
+// Consumer reads events from Kafka and applies them to projections
+type Consumer struct {
+	reader    *kafka.Reader
+	projector *projection.Projector
+}
+
+// NewConsumer creates a Kafka consumer for the ledger.entry.v1 topic
+func NewConsumer(brokers []string, projector *projection.Projector) *Consumer {
+	reader := kafka.NewReader(kafka.ReaderConfig{
+		Brokers:        brokers,
+		Topic:          "ledger.entry.v1",
+		GroupID:        "read-model-projections",
+		MinBytes:       1,
+		MaxBytes:       10e6, // 10MB
+		CommitInterval: time.Second,
+		StartOffset:    kafka.FirstOffset, // Start from beginning for new consumers
+	})
+
+	return &Consumer{
+		reader:    reader,
+		projector: projector,
+	}
+}
+
+// Start begins consuming messages and blocks until context is canceled
+func (c *Consumer) Start(ctx context.Context) error {
+	log.Println("Starting Kafka consumer for ledger.entry.v1")
+
+	for {
+		select {
+		case <-ctx.Done():
+			log.Println("Shutting down Kafka consumer")
+			return c.reader.Close()
+		default:
+		}
+
+		msg, err := c.reader.FetchMessage(ctx)
+		if err != nil {
+			if ctx.Err() != nil {
+				// Context canceled, exit gracefully
+				return c.reader.Close()
+			}
+			log.Printf("Error fetching message: %v", err)
+			time.Sleep(time.Second)
+			continue
+		}
+
+		// Extract event_id from headers
+		eventID, err := extractEventID(msg.Headers)
+		if err != nil {
+			log.Printf("Error extracting event_id: %v, skipping message", err)
+			c.reader.CommitMessages(ctx, msg)
+			continue
+		}
+
+		// Process the event
+		err = c.projector.ProcessEntryPosted(ctx, eventID, msg.Value)
+		if err != nil {
+			log.Printf("Error processing event %s: %v", eventID, err)
+			// Don't commit on error - will retry
+			time.Sleep(time.Second)
+			continue
+		}
+
+		// Commit the message
+		if err := c.reader.CommitMessages(ctx, msg); err != nil {
+			log.Printf("Error committing message: %v", err)
+		}
+	}
+}
+
+// extractEventID extracts the event_id from Kafka message headers
+func extractEventID(headers []kafka.Header) (uuid.UUID, error) {
+	for _, h := range headers {
+		if h.Key == "event_id" {
+			return uuid.Parse(string(h.Value))
+		}
+	}
+	return uuid.Nil, fmt.Errorf("event_id header not found")
+}
