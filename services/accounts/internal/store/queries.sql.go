@@ -7,9 +7,85 @@ package store
 
 import (
 	"context"
+	"encoding/json"
+	"time"
 
 	"github.com/google/uuid"
 )
+
+const createAccount = `-- name: CreateAccount :one
+
+INSERT INTO accounts (id, currency, status, created_at)
+VALUES ($1, $2, $3, $4)
+RETURNING id, currency, status, created_at
+`
+
+type CreateAccountParams struct {
+	ID        uuid.UUID
+	Currency  string
+	Status    string
+	CreatedAt time.Time
+}
+
+// Account Operations
+func (q *Queries) CreateAccount(ctx context.Context, arg CreateAccountParams) (Account, error) {
+	row := q.db.QueryRowContext(ctx, createAccount,
+		arg.ID,
+		arg.Currency,
+		arg.Status,
+		arg.CreatedAt,
+	)
+	var i Account
+	err := row.Scan(
+		&i.ID,
+		&i.Currency,
+		&i.Status,
+		&i.CreatedAt,
+	)
+	return i, err
+}
+
+const createOutboxEvent = `-- name: CreateOutboxEvent :one
+
+INSERT INTO outbox (id, aggregate_type, aggregate_id, event_type, payload, headers, created_at)
+VALUES ($1, $2, $3, $4, $5, $6, $7)
+RETURNING id, aggregate_type, aggregate_id, event_type, payload, headers, created_at, sent_at
+`
+
+type CreateOutboxEventParams struct {
+	ID            uuid.UUID
+	AggregateType string
+	AggregateID   uuid.UUID
+	EventType     string
+	Payload       []byte
+	Headers       json.RawMessage
+	CreatedAt     time.Time
+}
+
+// Outbox Operations
+func (q *Queries) CreateOutboxEvent(ctx context.Context, arg CreateOutboxEventParams) (Outbox, error) {
+	row := q.db.QueryRowContext(ctx, createOutboxEvent,
+		arg.ID,
+		arg.AggregateType,
+		arg.AggregateID,
+		arg.EventType,
+		arg.Payload,
+		arg.Headers,
+		arg.CreatedAt,
+	)
+	var i Outbox
+	err := row.Scan(
+		&i.ID,
+		&i.AggregateType,
+		&i.AggregateID,
+		&i.EventType,
+		&i.Payload,
+		&i.Headers,
+		&i.CreatedAt,
+		&i.SentAt,
+	)
+	return i, err
+}
 
 const getAccount = `-- name: GetAccount :one
 SELECT id, currency, status, created_at FROM accounts WHERE id = $1 LIMIT 1
@@ -25,4 +101,110 @@ func (q *Queries) GetAccount(ctx context.Context, id uuid.UUID) (Account, error)
 		&i.CreatedAt,
 	)
 	return i, err
+}
+
+const getOutboxEvent = `-- name: GetOutboxEvent :one
+SELECT id, aggregate_type, aggregate_id, event_type, payload, headers, created_at, sent_at FROM outbox
+WHERE id = $1
+`
+
+func (q *Queries) GetOutboxEvent(ctx context.Context, id uuid.UUID) (Outbox, error) {
+	row := q.db.QueryRowContext(ctx, getOutboxEvent, id)
+	var i Outbox
+	err := row.Scan(
+		&i.ID,
+		&i.AggregateType,
+		&i.AggregateID,
+		&i.EventType,
+		&i.Payload,
+		&i.Headers,
+		&i.CreatedAt,
+		&i.SentAt,
+	)
+	return i, err
+}
+
+const getUnsentOutboxEvents = `-- name: GetUnsentOutboxEvents :many
+SELECT id, aggregate_type, aggregate_id, event_type, payload, headers, created_at, sent_at FROM outbox
+WHERE sent_at IS NULL
+ORDER BY created_at
+LIMIT $1
+FOR UPDATE SKIP LOCKED
+`
+
+func (q *Queries) GetUnsentOutboxEvents(ctx context.Context, limit int32) ([]Outbox, error) {
+	rows, err := q.db.QueryContext(ctx, getUnsentOutboxEvents, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []Outbox
+	for rows.Next() {
+		var i Outbox
+		if err := rows.Scan(
+			&i.ID,
+			&i.AggregateType,
+			&i.AggregateID,
+			&i.EventType,
+			&i.Payload,
+			&i.Headers,
+			&i.CreatedAt,
+			&i.SentAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listAccounts = `-- name: ListAccounts :many
+SELECT id, currency, status, created_at FROM accounts
+ORDER BY created_at DESC
+LIMIT $1
+`
+
+func (q *Queries) ListAccounts(ctx context.Context, limit int32) ([]Account, error) {
+	rows, err := q.db.QueryContext(ctx, listAccounts, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []Account
+	for rows.Next() {
+		var i Account
+		if err := rows.Scan(
+			&i.ID,
+			&i.Currency,
+			&i.Status,
+			&i.CreatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const markOutboxEventSent = `-- name: MarkOutboxEventSent :exec
+UPDATE outbox
+SET sent_at = now()
+WHERE id = $1
+`
+
+func (q *Queries) MarkOutboxEventSent(ctx context.Context, id uuid.UUID) error {
+	_, err := q.db.ExecContext(ctx, markOutboxEventSent, id)
+	return err
 }

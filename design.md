@@ -639,5 +639,211 @@ curl -X POST http://localhost:7102/v1/entries -H "Content-Type: application/json
 
 5. **Transactional Outbox**: Single transaction for domain write + outbox guarantees at-least-once delivery without distributed transactions.
 
+6. **Local Module Dependencies**: Use `replace` directive in go.mod for local proto module to avoid GitHub dependency issues during development.
+
+7. **Redis Idempotency**: SETNX with TTL provides fast duplicate detection; database records provide long-term deduplication and audit trail.
+
+---
+
+### ✅ Day 3 Complete (2025-10-10)
+**Accounts Service & Posting-Orchestrator - FULLY IMPLEMENTED**
+
+#### What Was Built
+
+**1. Accounts Service** (`services/accounts`)
+
+**Database Schema** (`internal/store/migrations/0001_init.sql`)
+- ✅ `accounts` table (id, currency, status, created_at)
+- ✅ `outbox` table (transactional event publishing)
+- ✅ CHECK constraint on status (ACTIVE, SUSPENDED)
+- ✅ Indexes for currency and unsent outbox events
+
+**sqlc Queries** (`internal/store/queries.sql`)
+- ✅ `CreateAccount`, `GetAccount`, `ListAccounts`
+- ✅ `CreateOutboxEvent`, `GetUnsentOutboxEvents`, `MarkOutboxEventSent`
+- ✅ All queries type-safe and generated
+
+**Domain Logic** (`internal/domain/account.go`)
+- ✅ `Account` type with validation
+- ✅ `NewAccount` factory with currency validation (3-letter ISO code)
+- ✅ `ValidationError` with field-level error messages
+- ✅ Status enum (ACTIVE, SUSPENDED)
+
+**HTTP Handler** (`internal/http/http.go`)
+- ✅ `POST /v1/accounts` endpoint
+- ✅ Request validation (currency format)
+- ✅ **Transactional writes**: account + outbox in single DB transaction
+- ✅ Protobuf event serialization (`AccountCreated`)
+- ✅ Proper HTTP status codes (201, 400, 500)
+
+**Outbox Components**
+- ✅ `internal/outbox/publisher.go` - Kafka publisher with headers
+- ✅ `internal/outbox/relay.go` - Background polling with FOR UPDATE SKIP LOCKED
+- ✅ Topic routing: `AccountCreated` → `ledger.account.v1`
+
+**Service Wiring** (`cmd/accounts/main.go`)
+- ✅ Database connection with health check
+- ✅ Kafka publisher initialization
+- ✅ Outbox relay worker in background goroutine
+- ✅ HTTP server with Chi router
+- ✅ Graceful shutdown with signal handling
+
+**2. Posting-Orchestrator Service** (`services/posting-orchestrator`)
+
+**Database Schema** (`internal/store/migrations/0001_init.sql`)
+- ✅ `transfers` table (id, from/to accounts, amount, currency, idempotency_key, status, entry_id, failure_reason)
+- ✅ `outbox` table (transactional event publishing)
+- ✅ UNIQUE constraint on idempotency_key
+- ✅ CHECK constraints on amount (positive) and status (INITIATED, COMPLETED, FAILED)
+- ✅ Indexes for idempotency key, status, and unsent outbox events
+
+**sqlc Queries** (`internal/store/queries.sql`)
+- ✅ `CreateTransfer`, `GetTransfer`, `GetTransferByIdempotencyKey`
+- ✅ `UpdateTransferCompleted`, `UpdateTransferFailed`
+- ✅ Outbox operations (create, get unsent, mark sent)
+
+**Domain Logic** (`internal/domain/transfer.go`)
+- ✅ `Transfer` type with validation
+- ✅ `NewTransfer` factory with comprehensive validation:
+  - Amount must be positive
+  - Currency must be 3-letter ISO code
+  - From/to accounts must be different
+  - Idempotency key required
+- ✅ Status enum (INITIATED, COMPLETED, FAILED)
+
+**Redis Idempotency Guard** (`internal/idem/redis.go`)
+- ✅ `Guard` with SETNX-based claim mechanism
+- ✅ TTL-based expiration (5 minutes default)
+- ✅ Prevents concurrent processing of duplicate requests
+
+**HTTP Handler** (`internal/http/handler.go`)
+- ✅ `POST /v1/transfers` endpoint with full orchestration:
+  1. Parse and validate request
+  2. Check database for existing transfer (idempotency)
+  3. Claim Redis lock for idempotency key
+  4. Create transfer record with INITIATED status
+  5. Emit `TransferInitiated` event to outbox
+  6. Call ledger service to create journal entry (2 lines: DR/CR)
+  7. Update transfer status to COMPLETED/FAILED
+  8. Emit `TransferCompleted` or `TransferFailed` event
+- ✅ HTTP client for calling ledger service
+- ✅ Error handling with rollback on failure
+- ✅ Idempotent responses (return existing result if duplicate)
+
+**Outbox Components**
+- ✅ `internal/outbox/publisher.go` - Kafka publisher
+- ✅ `internal/outbox/relay.go` - Background polling worker
+- ✅ Topic routing: Transfer events → `ledger.transfer.v1`
+
+**Service Wiring** (`cmd/orchestrator/main.go`)
+- ✅ Database connection
+- ✅ Redis connection for idempotency
+- ✅ Kafka publisher initialization
+- ✅ Outbox relay worker
+- ✅ HTTP server with ledger service URL configuration
+- ✅ Graceful shutdown
+
+#### Key Achievements
+
+- ✅ **Accounts Service**: Complete CRUD with outbox pattern for `AccountCreated` events
+- ✅ **Transfer Orchestration**: Synchronous coordination with async event emission
+- ✅ **Idempotency**: Two-layer approach (Redis + Database) for exactly-once effect
+- ✅ **Transactional Outbox**: All services use consistent pattern for reliable event publishing
+- ✅ **Validation**: Comprehensive domain validation with clear error messages
+- ✅ **Error Handling**: Failed transfers marked with reason, emit `TransferFailed` events
+- ✅ **Production-Ready**: Graceful shutdown, structured logging, health checks
+
+#### Files Created/Modified
+
+```
+services/accounts/
+  internal/
+    domain/
+      account.go (new)
+    http/
+      http.go (updated with full handler)
+    outbox/
+      relay.go (new)
+      publisher.go (new)
+    store/
+      migrations/0001_init.sql (updated with outbox)
+      queries.sql (updated with account + outbox queries)
+      queries.sql.go (generated)
+      models.go (generated)
+  cmd/accounts/main.go (updated with full wiring)
+  go.mod (updated with dependencies)
+
+services/posting-orchestrator/
+  internal/
+    domain/
+      transfer.go (new)
+    http/
+      handler.go (new)
+    idem/
+      redis.go (existing, used)
+    outbox/
+      relay.go (new)
+      publisher.go (new)
+    store/
+      migrations/0001_init.sql (new)
+      queries.sql (new)
+      queries.sql.go (generated)
+      models.go (generated)
+      sqlc.yaml (new)
+  cmd/orchestrator/main.go (updated with full wiring)
+  go.mod (updated with dependencies)
+
+test_day3.ps1 (new - PowerShell test script)
+```
+
+#### Testing
+
+**Manual Test Script**: `test_day3.ps1`
+- Creates two accounts (A and B)
+- Executes transfer from A to B
+- Tests idempotency (retry same transfer)
+- Tests validation (invalid currency, same account transfer)
+- Verifies events published to Kafka
+
+**Expected Flow**:
+1. POST /v1/accounts → Account created → `AccountCreated` event → Kafka
+2. POST /v1/transfers → Transfer initiated → `TransferInitiated` event → Kafka
+3. Orchestrator calls ledger service → Journal entry created → `EntryPosted` event → Kafka
+4. Transfer marked completed → `TransferCompleted` event → Kafka
+
+**Kafka Topics Verification**:
+```bash
+# Check AccountCreated events
+docker exec -it redpanda rpk topic consume ledger.account.v1 --num 10
+
+# Check Transfer events
+docker exec -it redpanda rpk topic consume ledger.transfer.v1 --num 10
+
+# Check Entry events (from ledger service)
+docker exec -it redpanda rpk topic consume ledger.entry.v1 --num 10
+```
+
+---
+
+### 🎯 Next Steps (Day 4+)
+
+#### Day 4: Read-Model Projections
+**Priority: HIGH - Required for balance queries**
+
+1. **Read-Model Service** (`services/read-model`)
+   - [ ] Database schema: `balances`, `statements`, `event_dedup`
+   - [ ] Kafka consumer for `ledger.entry.v1` topic
+   - [ ] Projection logic: UPSERT balances, INSERT statements
+   - [ ] Idempotency via event_id deduplication
+   - [ ] Implement `GET /v1/accounts/:id/balance`
+   - [ ] Implement `GET /v1/accounts/:id/statements?from&to`
+
+2. **Gateway Integration** (`services/gateway`)
+   - [ ] Wire `POST /accounts` → accounts service
+   - [ ] Wire `POST /transfers` → orchestrator service
+   - [ ] Wire `GET /accounts/:id/balance` → read-model
+   - [ ] Wire `GET /accounts/:id/statements` → read-model
+   - [ ] Add request validation (Zod schemas)
+
 ---
 

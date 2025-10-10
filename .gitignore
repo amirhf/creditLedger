@@ -3,13 +3,15 @@
 node_modules
 coverage
 .env
-
+*.ps1
+*.exe*
 
 # go
 bin
 *.test
 *.out
-*.exe*
+
+
 
 
 # generated

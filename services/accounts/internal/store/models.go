@@ -5,6 +5,8 @@
 package store
 
 import (
+	"database/sql"
+	"encoding/json"
 	"time"
 
 	"github.com/google/uuid"
@@ -15,4 +17,15 @@ type Account struct {
 	Currency  string
 	Status    string
 	CreatedAt time.Time
+}
+
+type Outbox struct {
+	ID            uuid.UUID
+	AggregateType string
+	AggregateID   uuid.UUID
+	EventType     string
+	Payload       []byte
+	Headers       json.RawMessage
+	CreatedAt     time.Time
+	SentAt        sql.NullTime
 }
