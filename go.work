@@ -1,9 +1,9 @@
 go 1.24
 
 use (
-./services/accounts
-./services/ledger
-./services/posting-orchestrator
-./services/read-model
-./proto
+	./proto
+	./services/accounts
+	./services/ledger
+	./services/posting-orchestrator
+	./services/read-model
 )

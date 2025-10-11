@@ -9,6 +9,10 @@ import (
 	"github.com/amirhf/credit-ledger/services/read-model/internal/projection"
 	"github.com/google/uuid"
 	"github.com/segmentio/kafka-go"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/propagation"
+	"go.opentelemetry.io/otel/trace"
 )
 
 // Consumer reads events from Kafka and applies them to projections
@@ -58,17 +62,38 @@ func (c *Consumer) Start(ctx context.Context) error {
 			continue
 		}
 
+		// Extract trace context from Kafka headers
+		carrier := propagation.MapCarrier{}
+		for _, h := range msg.Headers {
+			carrier[h.Key] = string(h.Value)
+		}
+		msgCtx := otel.GetTextMapPropagator().Extract(ctx, carrier)
+
+		// Create span for message processing
+		tracer := otel.Tracer("kafka-consumer")
+		msgCtx, span := tracer.Start(msgCtx, "consume EntryPosted",
+			trace.WithAttributes(
+				attribute.String("kafka.topic", msg.Topic),
+				attribute.Int("kafka.partition", msg.Partition),
+				attribute.Int64("kafka.offset", msg.Offset),
+			),
+		)
+		defer span.End()
+
 		// Extract event_id from headers
 		eventID, err := extractEventID(msg.Headers)
 		if err != nil {
+			span.RecordError(err)
 			log.Printf("Error extracting event_id: %v, skipping message", err)
 			c.reader.CommitMessages(ctx, msg)
 			continue
 		}
+		span.SetAttributes(attribute.String("event_id", eventID.String()))
 
 		// Process the event
-		err = c.projector.ProcessEntryPosted(ctx, eventID, msg.Value)
+		err = c.projector.ProcessEntryPosted(msgCtx, eventID, msg.Value)
 		if err != nil {
+			span.RecordError(err)
 			log.Printf("Error processing event %s: %v", eventID, err)
 			// Don't commit on error - will retry
 			time.Sleep(time.Second)
@@ -77,6 +102,7 @@ func (c *Consumer) Start(ctx context.Context) error {
 
 		// Commit the message
 		if err := c.reader.CommitMessages(ctx, msg); err != nil {
+			span.RecordError(err)
 			log.Printf("Error committing message: %v", err)
 		}
 	}

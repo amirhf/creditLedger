@@ -9,6 +9,9 @@ import (
 	"time"
 
 	"github.com/amirhf/credit-ledger/services/accounts/internal/store"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/trace"
 )
 
 // Relay polls the outbox table and publishes events to Kafka
@@ -55,9 +58,14 @@ func (r *Relay) Start(ctx context.Context) error {
 
 // processOutbox fetches unsent events and publishes them
 func (r *Relay) processOutbox(ctx context.Context) error {
+	tracer := otel.Tracer("outbox-relay")
+	ctx, span := tracer.Start(ctx, "processOutbox")
+	defer span.End()
+
 	// Start a transaction for SELECT FOR UPDATE SKIP LOCKED
 	tx, err := r.db.BeginTx(ctx, nil)
 	if err != nil {
+		span.RecordError(err)
 		return fmt.Errorf("failed to begin transaction: %w", err)
 	}
 	defer tx.Rollback()
@@ -67,6 +75,7 @@ func (r *Relay) processOutbox(ctx context.Context) error {
 	// Fetch unsent events with row-level locking
 	events, err := qtx.GetUnsentOutboxEvents(ctx, r.batchSize)
 	if err != nil {
+		span.RecordError(err)
 		return fmt.Errorf("failed to fetch unsent events: %w", err)
 	}
 
@@ -74,6 +83,7 @@ func (r *Relay) processOutbox(ctx context.Context) error {
 		return nil // No events to process
 	}
 
+	span.SetAttributes(attribute.Int("event_count", len(events)))
 	r.logger.Printf("Processing %d outbox events", len(events))
 
 	// Process each event
@@ -87,6 +97,7 @@ func (r *Relay) processOutbox(ctx context.Context) error {
 
 	// Commit the transaction to mark events as sent
 	if err := tx.Commit(); err != nil {
+		span.RecordError(err)
 		return fmt.Errorf("failed to commit transaction: %w", err)
 	}
 
@@ -95,12 +106,25 @@ func (r *Relay) processOutbox(ctx context.Context) error {
 
 // publishEvent publishes a single event to Kafka and marks it as sent
 func (r *Relay) publishEvent(ctx context.Context, qtx *store.Queries, event store.Outbox) error {
+	tracer := otel.Tracer("outbox-relay")
+	ctx, span := tracer.Start(ctx, "publishEvent",
+		trace.WithAttributes(
+			attribute.String("event_id", event.ID.String()),
+			attribute.String("event_type", event.EventType),
+			attribute.String("aggregate_id", event.AggregateID.String()),
+			attribute.String("aggregate_type", event.AggregateType),
+		),
+	)
+	defer span.End()
+
 	// Determine the topic based on event type
 	topic := r.getTopicForEvent(event.EventType)
+	span.SetAttributes(attribute.String("kafka.topic", topic))
 
 	// Parse headers
 	var headers map[string]interface{}
 	if err := json.Unmarshal(event.Headers, &headers); err != nil {
+		span.RecordError(err)
 		return fmt.Errorf("failed to unmarshal headers: %w", err)
 	}
 
@@ -113,14 +137,16 @@ func (r *Relay) publishEvent(ctx context.Context, qtx *store.Queries, event stor
 	headersMap["aggregate_id"] = event.AggregateID.String()
 	headersMap["aggregate_type"] = event.AggregateType
 
-	// Publish to Kafka
+	// Publish to Kafka (trace context will be injected by publisher)
 	key := []byte(event.AggregateID.String())
 	if err := r.publisher.Publish(ctx, topic, key, event.Payload, headersMap); err != nil {
+		span.RecordError(err)
 		return fmt.Errorf("failed to publish to kafka: %w", err)
 	}
 
 	// Mark event as sent
 	if err := qtx.MarkOutboxEventSent(ctx, event.ID); err != nil {
+		span.RecordError(err)
 		return fmt.Errorf("failed to mark event as sent: %w", err)
 	}
 

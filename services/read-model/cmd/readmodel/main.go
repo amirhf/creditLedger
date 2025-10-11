@@ -13,12 +13,31 @@ import (
 	"github.com/amirhf/credit-ledger/services/read-model/internal/consumer"
 	readmodelhttp "github.com/amirhf/credit-ledger/services/read-model/internal/http"
 	"github.com/amirhf/credit-ledger/services/read-model/internal/projection"
+	"github.com/amirhf/credit-ledger/services/read-model/internal/telemetry"
 	"github.com/go-chi/chi/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
+	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
 )
 
 func main() {
+	// Initialize OpenTelemetry tracer
+	ctx := context.Background()
+	otlpEndpoint := os.Getenv("OTEL_EXPORTER_OTLP_ENDPOINT")
+	if otlpEndpoint == "" {
+		otlpEndpoint = "localhost:4318" // Default Jaeger OTLP endpoint
+	}
+	
+	tp, err := telemetry.InitTracer(ctx, "read-model-service", otlpEndpoint)
+	if err != nil {
+		log.Fatalf("Failed to initialize tracer: %v", err)
+	}
+	defer func() {
+		if err := telemetry.Shutdown(ctx, tp); err != nil {
+			log.Printf("Error shutting down tracer: %v", err)
+		}
+	}()
+
 	// Load environment variables
 	dbURL := os.Getenv("DATABASE_URL")
 	if dbURL == "" {
@@ -37,7 +56,6 @@ func main() {
 	}
 
 	// Connect to database
-	ctx := context.Background()
 	dbPool, err := pgxpool.New(ctx, dbURL)
 	if err != nil {
 		log.Fatalf("Failed to connect to database: %v", err)
@@ -68,6 +86,16 @@ func main() {
 
 	// Setup HTTP server
 	r := chi.NewRouter()
+	
+	// Add OpenTelemetry HTTP middleware
+	r.Use(func(next http.Handler) http.Handler {
+		return otelhttp.NewHandler(next, "read-model-service",
+			otelhttp.WithSpanNameFormatter(func(operation string, r *http.Request) string {
+				return r.Method + " " + r.URL.Path
+			}),
+		)
+	})
+	
 	r.Get("/healthz", func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	})

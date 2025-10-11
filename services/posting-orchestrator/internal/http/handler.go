@@ -15,6 +15,7 @@ import (
 	"github.com/amirhf/credit-ledger/services/posting-orchestrator/internal/idem"
 	"github.com/amirhf/credit-ledger/services/posting-orchestrator/internal/store"
 	"github.com/google/uuid"
+	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
 	"google.golang.org/protobuf/proto"
 )
 
@@ -71,12 +72,15 @@ type Handler struct {
 // NewHandler creates a new HTTP handler
 func NewHandler(db *sql.DB, idemGuard *idem.Guard, ledgerURL string, logger *log.Logger) *Handler {
 	return &Handler{
-		db:         db,
-		queries:    store.New(db),
-		idemGuard:  idemGuard,
-		ledgerURL:  ledgerURL,
-		httpClient: &http.Client{Timeout: 10 * time.Second},
-		logger:     logger,
+		db:        db,
+		queries:   store.New(db),
+		idemGuard: idemGuard,
+		ledgerURL: ledgerURL,
+		httpClient: &http.Client{
+			Timeout:   10 * time.Second,
+			Transport: otelhttp.NewTransport(http.DefaultTransport),
+		},
+		logger: logger,
 	}
 }
 

@@ -14,12 +14,31 @@ import (
 	orchestratorhttp "github.com/amirhf/credit-ledger/services/posting-orchestrator/internal/http"
 	"github.com/amirhf/credit-ledger/services/posting-orchestrator/internal/idem"
 	"github.com/amirhf/credit-ledger/services/posting-orchestrator/internal/outbox"
+	"github.com/amirhf/credit-ledger/services/posting-orchestrator/internal/telemetry"
 	"github.com/go-chi/chi/v5"
 	_ "github.com/lib/pq"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
+	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
 )
 
 func main() {
+	// Initialize OpenTelemetry tracer
+	ctx := context.Background()
+	otlpEndpoint := os.Getenv("OTEL_EXPORTER_OTLP_ENDPOINT")
+	if otlpEndpoint == "" {
+		otlpEndpoint = "localhost:4318" // Default Jaeger OTLP endpoint
+	}
+	
+	tp, err := telemetry.InitTracer(ctx, "orchestrator-service", otlpEndpoint)
+	if err != nil {
+		log.Fatalf("Failed to initialize tracer: %v", err)
+	}
+	defer func() {
+		if err := telemetry.Shutdown(ctx, tp); err != nil {
+			log.Printf("Error shutting down tracer: %v", err)
+		}
+	}()
+
 	// Get database URL from environment
 	dbURL := os.Getenv("DATABASE_URL")
 	if dbURL == "" {
@@ -85,6 +104,16 @@ func main() {
 
 	// Setup router
 	r := chi.NewRouter()
+	
+	// Add OpenTelemetry HTTP middleware
+	r.Use(func(next http.Handler) http.Handler {
+		return otelhttp.NewHandler(next, "orchestrator-service",
+			otelhttp.WithSpanNameFormatter(func(operation string, r *http.Request) string {
+				return r.Method + " " + r.URL.Path
+			}),
+		)
+	})
+	
 	r.Get("/healthz", func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(http.StatusOK) })
 	r.Handle("/metrics", promhttp.Handler())
 	r.Post("/v1/transfers", handler.CreateTransfer)
