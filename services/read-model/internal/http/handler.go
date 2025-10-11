@@ -73,9 +73,25 @@ func (h *Handler) GetBalance(w http.ResponseWriter, r *http.Request) {
 	balance, err := h.queries.GetBalance(r.Context(), pgAccountID)
 	if err != nil {
 		if err == pgx.ErrNoRows {
-			metrics.BalanceQueriesTotal.WithLabelValues("not_found").Inc()
-			metrics.QueryDuration.WithLabelValues("balance", "not_found").Observe(time.Since(start).Seconds())
-			http.Error(w, `{"error":"account not found"}`, http.StatusNotFound)
+			// No balance record yet - return zero balance with currency from query param or default
+			currency := r.URL.Query().Get("currency")
+			if currency == "" {
+				currency = "USD" // Default currency
+			}
+			
+			metrics.BalanceQueriesTotal.WithLabelValues("zero_balance").Inc()
+			metrics.QueryDuration.WithLabelValues("balance", "zero_balance").Observe(time.Since(start).Seconds())
+			
+			resp := BalanceResponse{
+				AccountID:    accountID.String(),
+				Currency:     currency,
+				BalanceMinor: 0,
+				UpdatedAt:    time.Now().Format(time.RFC3339),
+			}
+			
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusOK)
+			json.NewEncoder(w).Encode(resp)
 			return
 		}
 		log.Printf("Error getting balance: %v", err)

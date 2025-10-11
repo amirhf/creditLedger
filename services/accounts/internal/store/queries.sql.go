@@ -13,6 +13,24 @@ import (
 	"github.com/google/uuid"
 )
 
+const countAccounts = `-- name: CountAccounts :one
+SELECT COUNT(*) FROM accounts
+WHERE ($1::text IS NULL OR currency = $1)
+  AND ($2::text IS NULL OR status = $2)
+`
+
+type CountAccountsParams struct {
+	Column1 string
+	Column2 string
+}
+
+func (q *Queries) CountAccounts(ctx context.Context, arg CountAccountsParams) (int64, error) {
+	row := q.db.QueryRowContext(ctx, countAccounts, arg.Column1, arg.Column2)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
+
 const createAccount = `-- name: CreateAccount :one
 
 INSERT INTO accounts (id, currency, status, created_at)
@@ -166,12 +184,26 @@ func (q *Queries) GetUnsentOutboxEvents(ctx context.Context, limit int32) ([]Out
 
 const listAccounts = `-- name: ListAccounts :many
 SELECT id, currency, status, created_at FROM accounts
+WHERE ($1::text IS NULL OR currency = $1)
+  AND ($2::text IS NULL OR status = $2)
 ORDER BY created_at DESC
-LIMIT $1
+LIMIT $3 OFFSET $4
 `
 
-func (q *Queries) ListAccounts(ctx context.Context, limit int32) ([]Account, error) {
-	rows, err := q.db.QueryContext(ctx, listAccounts, limit)
+type ListAccountsParams struct {
+	Column1 string
+	Column2 string
+	Limit   int32
+	Offset  int32
+}
+
+func (q *Queries) ListAccounts(ctx context.Context, arg ListAccountsParams) ([]Account, error) {
+	rows, err := q.db.QueryContext(ctx, listAccounts,
+		arg.Column1,
+		arg.Column2,
+		arg.Limit,
+		arg.Offset,
+	)
 	if err != nil {
 		return nil, err
 	}

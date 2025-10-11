@@ -4,6 +4,7 @@ node_modules
 coverage
 .env
 *.exe*
+*.ps1
 
 # go
 bin

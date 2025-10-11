@@ -10,8 +10,15 @@ SELECT * FROM accounts WHERE id = $1 LIMIT 1;
 
 -- name: ListAccounts :many
 SELECT * FROM accounts
+WHERE ($1::text IS NULL OR currency = $1)
+  AND ($2::text IS NULL OR status = $2)
 ORDER BY created_at DESC
-LIMIT $1;
+LIMIT $3 OFFSET $4;
+
+-- name: CountAccounts :one
+SELECT COUNT(*) FROM accounts
+WHERE ($1::text IS NULL OR currency = $1)
+  AND ($2::text IS NULL OR status = $2);
 
 -- Outbox Operations
 

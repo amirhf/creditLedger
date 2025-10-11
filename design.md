@@ -312,6 +312,12 @@ Stretch (optional):
 ---
 
 ## 17. Backlog (next iterations)
+- **Deposit/Withdrawal Functionality**: The current MVP is a pure transfer system (money only moves between accounts). To add deposits/withdrawals:
+  - Create system accounts (e.g., "BANK_CASH", "EXTERNAL_SOURCES") representing external money
+  - Add `POST /deposits` endpoint: transfer from system account to user account
+  - Add `POST /withdrawals` endpoint: transfer from user account to system account
+  - Maintain double-entry invariant: every deposit/withdrawal is a transfer with system account
+  - Consider: audit trail for external transactions, reconciliation with payment gateways
 - Limits engine (per-account overdraft rules; hard/soft limits).
 - Multi-currency support (Money type, FX snapshot on posting).
 - Partitioning strategy for high-volume (Kafka keys by `account_id`, Postgres sharding ADR).

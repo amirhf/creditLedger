@@ -1,0 +1,177 @@
+### Gateway API Tests
+### Use VS Code REST Client extension or any HTTP client
+
+@gateway = http://localhost:4000
+@accountsService = http://localhost:7101
+@orchestratorService = http://localhost:7103
+@readmodelService = http://localhost:7104
+
+### Health Check
+GET {{gateway}}/healthz
+
+### ============================================
+### Test 1: Create Account A
+POST {{gateway}}/accounts
+Content-Type: application/json
+
+{
+  "currency": "USD"
+}
+
+### Save the account_id from response above, then use it below
+@accountA = PASTE_ACCOUNT_ID_HERE
+
+### ============================================
+### Test 2: Create Account B
+POST {{gateway}}/accounts
+Content-Type: application/json
+
+{
+  "currency": "USD"
+}
+
+### Save the account_id from response above
+@accountB = PASTE_ACCOUNT_ID_HERE
+
+### ============================================
+### Test 3: Get Account Details
+GET {{gateway}}/accounts/{{accountA}}
+
+### ============================================
+### Test 4: Create Transfer
+POST {{gateway}}/transfers
+Content-Type: application/json
+
+{
+  "from_account_id": "{{accountA}}",
+  "to_account_id": "{{accountB}}",
+  "amount_minor": 5000,
+  "currency": "USD",
+  "idempotency_key": "test-transfer-001"
+}
+
+### Save the transfer_id from response above
+@transferId = PASTE_TRANSFER_ID_HERE
+
+### ============================================
+### Test 5: Get Transfer Details
+GET {{gateway}}/transfers/{{transferId}}
+
+### ============================================
+### Test 6: Get Account A Balance
+### Wait 2 seconds for projection to update
+GET {{gateway}}/accounts/{{accountA}}/balance
+
+### ============================================
+### Test 7: Get Account B Balance
+GET {{gateway}}/accounts/{{accountB}}/balance
+
+### ============================================
+### Test 8: Get Account A Statements
+GET {{gateway}}/accounts/{{accountA}}/statements?limit=10
+
+### ============================================
+### Test 9: Get Account B Statements
+GET {{gateway}}/accounts/{{accountB}}/statements?limit=10
+
+### ============================================
+### Test 10: Idempotency Test (Duplicate Transfer)
+POST {{gateway}}/transfers
+Content-Type: application/json
+
+{
+  "from_account_id": "{{accountA}}",
+  "to_account_id": "{{accountB}}",
+  "amount_minor": 5000,
+  "currency": "USD",
+  "idempotency_key": "test-transfer-001"
+}
+
+### Should return same transfer_id as Test 4
+
+### ============================================
+### VALIDATION TESTS
+### ============================================
+
+### Test 11: Invalid Currency (should fail with 400)
+POST {{gateway}}/accounts
+Content-Type: application/json
+
+{
+  "currency": "US"
+}
+
+### ============================================
+### Test 12: Invalid UUID (should fail with 400)
+GET {{gateway}}/accounts/invalid-uuid-format
+
+### ============================================
+### Test 13: Same Account Transfer (should fail with 400)
+POST {{gateway}}/transfers
+Content-Type: application/json
+
+{
+  "from_account_id": "{{accountA}}",
+  "to_account_id": "{{accountA}}",
+  "amount_minor": 1000,
+  "currency": "USD",
+  "idempotency_key": "same-account-test"
+}
+
+### ============================================
+### Test 14: Negative Amount (should fail with 400)
+POST {{gateway}}/transfers
+Content-Type: application/json
+
+{
+  "from_account_id": "{{accountA}}",
+  "to_account_id": "{{accountB}}",
+  "amount_minor": -1000,
+  "currency": "USD",
+  "idempotency_key": "negative-amount-test"
+}
+
+### ============================================
+### Test 15: Missing Idempotency Key (should fail with 400)
+POST {{gateway}}/transfers
+Content-Type: application/json
+
+{
+  "from_account_id": "{{accountA}}",
+  "to_account_id": "{{accountB}}",
+  "amount_minor": 1000,
+  "currency": "USD"
+}
+
+### ============================================
+### DIRECT SERVICE TESTS (Bypass Gateway)
+### ============================================
+
+### Direct: Create Account via Accounts Service
+POST {{accountsService}}/v1/accounts
+Content-Type: application/json
+
+{
+  "currency": "EUR"
+}
+
+### Direct: Get Account via Accounts Service
+GET {{accountsService}}/v1/accounts/{{accountA}}
+
+### Direct: Create Transfer via Orchestrator
+POST {{orchestratorService}}/v1/transfers
+Content-Type: application/json
+
+{
+  "from_account_id": "{{accountA}}",
+  "to_account_id": "{{accountB}}",
+  "amount_minor": 2500,
+  "currency": "USD",
+  "idempotency_key": "direct-transfer-001"
+}
+
+### Direct: Get Balance via Read-Model
+GET {{readmodelService}}/v1/accounts/{{accountA}}/balance
+
+### Direct: Get Statements via Read-Model
+GET {{readmodelService}}/v1/accounts/{{accountA}}/statements?limit=5

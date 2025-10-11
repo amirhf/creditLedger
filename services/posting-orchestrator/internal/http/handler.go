@@ -417,6 +417,59 @@ func (h *Handler) respondTransfer(w http.ResponseWriter, transfer store.Transfer
 	json.NewEncoder(w).Encode(resp)
 }
 
+// GetTransfer handles GET /v1/transfers/:id
+func (h *Handler) GetTransfer(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+
+	// Extract transfer ID from URL parameter (chi router)
+	transferIDStr := r.PathValue("id")
+	if transferIDStr == "" {
+		h.respondError(w, http.StatusBadRequest, "invalid_transfer_id", "Transfer ID is required")
+		return
+	}
+	
+	transferID, err := uuid.Parse(transferIDStr)
+	if err != nil {
+		h.respondError(w, http.StatusBadRequest, "invalid_transfer_id", "Transfer ID must be a valid UUID")
+		return
+	}
+
+	// Fetch transfer from database
+	transfer, err := h.queries.GetTransfer(ctx, transferID)
+	if err != nil {
+		if err == sql.ErrNoRows {
+			h.respondError(w, http.StatusNotFound, "transfer_not_found", "Transfer not found")
+			return
+		}
+		h.logger.Printf("Failed to get transfer: %v", err)
+		h.respondError(w, http.StatusInternalServerError, "internal_error", "Failed to get transfer")
+		return
+	}
+
+	// Build response
+	resp := map[string]interface{}{
+		"id":              transfer.ID.String(),
+		"from_account_id": transfer.FromAccountID.String(),
+		"to_account_id":   transfer.ToAccountID.String(),
+		"amount_minor":    transfer.AmountMinor,
+		"currency":        transfer.Currency,
+		"status":          transfer.Status,
+		"idempotency_key": transfer.IdempotencyKey,
+		"created_at":      transfer.CreatedAt.Format(time.RFC3339),
+	}
+	if transfer.EntryID.Valid {
+		resp["entry_id"] = transfer.EntryID.UUID.String()
+	}
+	if transfer.FailureReason.Valid {
+		resp["failure_reason"] = transfer.FailureReason.String
+	}
+
+	// Respond with transfer data
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	json.NewEncoder(w).Encode(resp)
+}
+
 // respondError sends an error response
 func (h *Handler) respondError(w http.ResponseWriter, status int, error string, message string) {
 	w.Header().Set("Content-Type", "application/json")

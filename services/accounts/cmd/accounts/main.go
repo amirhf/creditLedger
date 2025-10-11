@@ -101,6 +101,8 @@ func main() {
 	r.Get("/healthz", func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(http.StatusOK) })
 	r.Handle("/metrics", promhttp.Handler())
 	r.Post("/v1/accounts", handler.CreateAccount)
+	r.Get("/v1/accounts", handler.ListAccounts)
+	r.Get("/v1/accounts/{id}", handler.GetAccount)
 
 	// Setup HTTP server
 	addr := ":7101"

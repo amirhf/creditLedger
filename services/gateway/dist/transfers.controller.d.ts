@@ -1,18 +1,20 @@
-import { z } from 'zod';
+import { OrchestratorService } from './services/orchestrator.service';
 export declare class TransfersController {
-    create(body: any): Promise<{
-        error: z.typeToFlattenedError<{
-            from?: string;
-            to?: string;
-            amount?: number;
-            currency?: string;
-            idempotencyKey?: string;
-        }, string>;
-        accepted?: undefined;
-        transferId?: undefined;
-    } | {
-        accepted: boolean;
-        transferId: string;
-        error?: undefined;
+    private readonly orchestratorService;
+    constructor(orchestratorService: OrchestratorService);
+    createTransfer(body: any): Promise<{
+        status?: string;
+        transfer_id?: string;
+    }>;
+    listTransfers(query: any): Promise<any>;
+    getTransfer(id: string): Promise<{
+        status?: string;
+        from_account_id?: string;
+        to_account_id?: string;
+        amount_minor?: number;
+        currency?: string;
+        idempotency_key?: string;
+        id?: string;
+        created_at?: string;
     }>;
 }

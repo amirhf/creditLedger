@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"log"
 	"net/http"
+	"strconv"
 	"time"
 
 	ledgerv1 "github.com/amirhf/credit-ledger/proto/gen/go/ledger/v1"
@@ -145,6 +146,117 @@ func (h *Handler) CreateAccount(w http.ResponseWriter, r *http.Request) {
 		AccountID: dbAccount.ID.String(),
 		Currency:  dbAccount.Currency,
 		Status:    dbAccount.Status,
+	})
+}
+
+// ListAccounts handles GET /v1/accounts
+func (h *Handler) ListAccounts(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+
+	// Parse query parameters
+	currency := r.URL.Query().Get("currency")
+	status := r.URL.Query().Get("status")
+	limitStr := r.URL.Query().Get("limit")
+	offsetStr := r.URL.Query().Get("offset")
+
+	// Default values
+	limit := int32(20)
+	offset := int32(0)
+
+	if limitStr != "" {
+		if l, err := strconv.ParseInt(limitStr, 10, 32); err == nil && l > 0 && l <= 100 {
+			limit = int32(l)
+		}
+	}
+
+	if offsetStr != "" {
+		if o, err := strconv.ParseInt(offsetStr, 10, 32); err == nil && o >= 0 {
+			offset = int32(o)
+		}
+	}
+
+	// Get total count
+	total, err := h.queries.CountAccounts(ctx, store.CountAccountsParams{
+		Column1: currency,
+		Column2: status,
+	})
+	if err != nil {
+		h.logger.Printf("Failed to count accounts: %v", err)
+		h.respondError(w, http.StatusInternalServerError, "internal_error", "Failed to list accounts")
+		return
+	}
+
+	// Get accounts
+	accounts, err := h.queries.ListAccounts(ctx, store.ListAccountsParams{
+		Column1: currency,
+		Column2: status,
+		Limit:   limit,
+		Offset:  offset,
+	})
+	if err != nil {
+		h.logger.Printf("Failed to list accounts: %v", err)
+		h.respondError(w, http.StatusInternalServerError, "internal_error", "Failed to list accounts")
+		return
+	}
+
+	// Build response
+	accountsList := make([]map[string]interface{}, len(accounts))
+	for i, acc := range accounts {
+		accountsList[i] = map[string]interface{}{
+			"id":         acc.ID.String(),
+			"currency":   acc.Currency,
+			"status":     acc.Status,
+			"created_at": acc.CreatedAt.Format(time.RFC3339),
+		}
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"accounts": accountsList,
+		"total":    total,
+		"limit":    limit,
+		"offset":   offset,
+	})
+}
+
+// GetAccount handles GET /v1/accounts/:id
+func (h *Handler) GetAccount(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+
+	// Extract account ID from URL parameter (chi router)
+	accountIDStr := r.PathValue("id")
+	if accountIDStr == "" {
+		h.respondError(w, http.StatusBadRequest, "invalid_account_id", "Account ID is required")
+		return
+	}
+	
+	accountID, err := uuid.Parse(accountIDStr)
+	if err != nil {
+		h.respondError(w, http.StatusBadRequest, "invalid_account_id", "Account ID must be a valid UUID")
+		return
+	}
+
+	// Fetch account from database
+	account, err := h.queries.GetAccount(ctx, accountID)
+	if err != nil {
+		if err == sql.ErrNoRows {
+			h.respondError(w, http.StatusNotFound, "account_not_found", "Account not found")
+			return
+		}
+		h.logger.Printf("Failed to get account: %v", err)
+		h.respondError(w, http.StatusInternalServerError, "internal_error", "Failed to get account")
+		return
+	}
+
+	// Respond with account data
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"id":         account.ID.String(),
+		"currency":   account.Currency,
+		"status":     account.Status,
+		"created_at": account.CreatedAt.Format(time.RFC3339),
 	})
 }
 

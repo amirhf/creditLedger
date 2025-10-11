@@ -64,6 +64,15 @@ services:
     ports: ["5435:5432"]
 
 
+  postgres-orchestrator:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-ledgerpw}
+      POSTGRES_USER: ${POSTGRES_USER:-ledger}
+      POSTGRES_DB: ${POSTGRES_DB_ORCHESTRATOR:-orchestrator}
+    ports: ["5436:5432"]
+
+
   jaeger:
     image: jaegertracing/all-in-one:1.57
     environment:
