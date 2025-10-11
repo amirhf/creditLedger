@@ -6,6 +6,7 @@ import (
 	"log"
 	"time"
 
+	"github.com/amirhf/credit-ledger/services/read-model/internal/metrics"
 	"github.com/amirhf/credit-ledger/services/read-model/internal/projection"
 	"github.com/google/uuid"
 	"github.com/segmentio/kafka-go"
@@ -91,14 +92,23 @@ func (c *Consumer) Start(ctx context.Context) error {
 		span.SetAttributes(attribute.String("event_id", eventID.String()))
 
 		// Process the event
+		start := time.Now()
 		err = c.projector.ProcessEntryPosted(msgCtx, eventID, msg.Value)
+		duration := time.Since(start).Seconds()
+		
 		if err != nil {
 			span.RecordError(err)
+			metrics.EventProcessingErrors.WithLabelValues("EntryPosted", "processing_error").Inc()
+			metrics.EventProcessingDuration.WithLabelValues("EntryPosted", "error").Observe(duration)
 			log.Printf("Error processing event %s: %v", eventID, err)
 			// Don't commit on error - will retry
 			time.Sleep(time.Second)
 			continue
 		}
+
+		// Record successful processing
+		metrics.EventsProcessed.WithLabelValues("EntryPosted").Inc()
+		metrics.EventProcessingDuration.WithLabelValues("EntryPosted", "success").Observe(duration)
 
 		// Commit the message
 		if err := c.reader.CommitMessages(ctx, msg); err != nil {

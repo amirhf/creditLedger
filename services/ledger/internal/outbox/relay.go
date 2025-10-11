@@ -8,6 +8,7 @@ import (
 	"log"
 	"time"
 
+	"github.com/amirhf/credit-ledger/services/ledger/internal/metrics"
 	"github.com/amirhf/credit-ledger/services/ledger/internal/store"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
@@ -141,14 +142,23 @@ func (r *Relay) publishEvent(ctx context.Context, qtx *store.Queries, event stor
 	key := []byte(event.AggregateID.String())
 	if err := r.publisher.Publish(ctx, topic, key, event.Payload, headersMap); err != nil {
 		span.RecordError(err)
+		metrics.OutboxEventsPublishErrors.WithLabelValues(event.EventType, "kafka_error").Inc()
 		return fmt.Errorf("failed to publish to kafka: %w", err)
 	}
 
 	// Mark event as sent
 	if err := qtx.MarkOutboxEventSent(ctx, event.ID); err != nil {
 		span.RecordError(err)
+		metrics.OutboxEventsPublishErrors.WithLabelValues(event.EventType, "db_error").Inc()
 		return fmt.Errorf("failed to mark event as sent: %w", err)
 	}
+
+	// Record metrics
+	metrics.OutboxEventsPublished.WithLabelValues(event.EventType, topic).Inc()
+	
+	// Calculate and record latency from event creation to publish
+	latency := time.Since(event.CreatedAt).Seconds()
+	metrics.OutboxRelayLatency.Observe(latency)
 
 	r.logger.Printf("Published event %s to topic %s", event.ID, topic)
 	return nil

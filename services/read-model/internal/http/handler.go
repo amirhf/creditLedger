@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/amirhf/credit-ledger/services/read-model/internal/metrics"
 	"github.com/amirhf/credit-ledger/services/read-model/internal/store"
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
@@ -54,9 +55,11 @@ type StatementsResponse struct {
 
 // GetBalance handles GET /v1/accounts/:id/balance
 func (h *Handler) GetBalance(w http.ResponseWriter, r *http.Request) {
+	start := time.Now()
 	accountIDStr := chi.URLParam(r, "id")
 	accountID, err := uuid.Parse(accountIDStr)
 	if err != nil {
+		metrics.BalanceQueriesTotal.WithLabelValues("invalid_input").Inc()
 		http.Error(w, `{"error":"invalid account_id"}`, http.StatusBadRequest)
 		return
 	}
@@ -70,10 +73,14 @@ func (h *Handler) GetBalance(w http.ResponseWriter, r *http.Request) {
 	balance, err := h.queries.GetBalance(r.Context(), pgAccountID)
 	if err != nil {
 		if err == pgx.ErrNoRows {
+			metrics.BalanceQueriesTotal.WithLabelValues("not_found").Inc()
+			metrics.QueryDuration.WithLabelValues("balance", "not_found").Observe(time.Since(start).Seconds())
 			http.Error(w, `{"error":"account not found"}`, http.StatusNotFound)
 			return
 		}
 		log.Printf("Error getting balance: %v", err)
+		metrics.BalanceQueriesTotal.WithLabelValues("error").Inc()
+		metrics.QueryDuration.WithLabelValues("balance", "error").Observe(time.Since(start).Seconds())
 		http.Error(w, `{"error":"internal server error"}`, http.StatusInternalServerError)
 		return
 	}
@@ -88,6 +95,9 @@ func (h *Handler) GetBalance(w http.ResponseWriter, r *http.Request) {
 		UpdatedAt:    balance.UpdatedAt.Time.Format(time.RFC3339),
 	}
 
+	metrics.BalanceQueriesTotal.WithLabelValues("success").Inc()
+	metrics.QueryDuration.WithLabelValues("balance", "success").Observe(time.Since(start).Seconds())
+
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
 	json.NewEncoder(w).Encode(resp)
@@ -95,9 +105,11 @@ func (h *Handler) GetBalance(w http.ResponseWriter, r *http.Request) {
 
 // GetStatements handles GET /v1/accounts/:id/statements
 func (h *Handler) GetStatements(w http.ResponseWriter, r *http.Request) {
+	start := time.Now()
 	accountIDStr := chi.URLParam(r, "id")
 	accountID, err := uuid.Parse(accountIDStr)
 	if err != nil {
+		metrics.StatementQueriesTotal.WithLabelValues("invalid_input").Inc()
 		http.Error(w, `{"error":"invalid account_id"}`, http.StatusBadRequest)
 		return
 	}
@@ -161,6 +173,8 @@ func (h *Handler) GetStatements(w http.ResponseWriter, r *http.Request) {
 
 	if queryErr != nil {
 		log.Printf("Error getting statements: %v", queryErr)
+		metrics.StatementQueriesTotal.WithLabelValues("error").Inc()
+		metrics.QueryDuration.WithLabelValues("statements", "error").Observe(time.Since(start).Seconds())
 		http.Error(w, `{"error":"internal server error"}`, http.StatusInternalServerError)
 		return
 	}
@@ -185,6 +199,9 @@ func (h *Handler) GetStatements(w http.ResponseWriter, r *http.Request) {
 	resp := StatementsResponse{
 		Statements: entries,
 	}
+
+	metrics.StatementQueriesTotal.WithLabelValues("success").Inc()
+	metrics.QueryDuration.WithLabelValues("statements", "success").Observe(time.Since(start).Seconds())
 
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)

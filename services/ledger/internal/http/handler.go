@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/amirhf/credit-ledger/services/ledger/internal/domain"
+	"github.com/amirhf/credit-ledger/services/ledger/internal/metrics"
 	"github.com/amirhf/credit-ledger/services/ledger/internal/store"
 	ledgerv1 "github.com/amirhf/credit-ledger/proto/gen/go/ledger/v1"
 	"github.com/google/uuid"
@@ -58,6 +59,7 @@ func NewHandler(db *sql.DB, logger *log.Logger) *Handler {
 // CreateEntry handles POST /v1/entries
 func (h *Handler) CreateEntry(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
+	start := time.Now()
 
 	// Parse request body
 	var req CreateEntryRequest
@@ -190,9 +192,14 @@ func (h *Handler) CreateEntry(w http.ResponseWriter, r *http.Request) {
 	// Commit transaction
 	if err := tx.Commit(); err != nil {
 		h.logger.Printf("Failed to commit transaction: %v", err)
+		metrics.EntryCreationDuration.WithLabelValues("error").Observe(time.Since(start).Seconds())
 		h.respondError(w, http.StatusInternalServerError, "database_error", "Failed to commit entry")
 		return
 	}
+
+	// Record metrics
+	metrics.EntriesCreated.WithLabelValues("USD").Inc() // TODO: extract currency from entry
+	metrics.EntryCreationDuration.WithLabelValues("success").Observe(time.Since(start).Seconds())
 
 	// Return success response
 	h.respondJSON(w, http.StatusCreated, CreateEntryResponse{
