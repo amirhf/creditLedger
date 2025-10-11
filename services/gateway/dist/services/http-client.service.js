@@ -13,6 +13,7 @@ Object.defineProperty(exports, "__esModule", { value: true });
 exports.HttpClientService = void 0;
 const common_1 = require("@nestjs/common");
 const axios_1 = require("axios");
+const api_1 = require("@opentelemetry/api");
 let HttpClientService = HttpClientService_1 = class HttpClientService {
     constructor(config) {
         this.logger = new common_1.Logger(HttpClientService_1.name);
@@ -25,8 +26,21 @@ let HttpClientService = HttpClientService_1 = class HttpClientService {
             }
         });
         this.client.interceptors.request.use((config) => {
-            var _a;
-            this.logger.debug(`${(_a = config.method) === null || _a === void 0 ? void 0 : _a.toUpperCase()} ${config.baseURL}${config.url}`);
+            var _a, _b;
+            const activeContext = api_1.context.active();
+            const span = api_1.trace.getActiveSpan();
+            if (span) {
+                api_1.propagation.inject(activeContext, config.headers);
+                const traceId = span.spanContext().traceId;
+                const spanId = span.spanContext().spanId;
+                this.logger.debug(`${(_a = config.method) === null || _a === void 0 ? void 0 : _a.toUpperCase()} ${config.baseURL}${config.url}`, {
+                    traceId,
+                    spanId,
+                });
+            }
+            else {
+                this.logger.debug(`${(_b = config.method) === null || _b === void 0 ? void 0 : _b.toUpperCase()} ${config.baseURL}${config.url}`);
+            }
             return config;
         }, (error) => {
             this.logger.error('Request error:', error.message);

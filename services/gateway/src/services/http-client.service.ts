@@ -1,5 +1,6 @@
 import { Injectable, Logger } from '@nestjs/common';
 import axios, { AxiosInstance, AxiosError, AxiosRequestConfig } from 'axios';
+import { context, trace, propagation } from '@opentelemetry/api';
 
 export interface HttpClientConfig {
   baseURL: string;
@@ -23,10 +24,28 @@ export class HttpClientService {
       }
     });
 
-    // Request interceptor for logging
+    // Request interceptor for logging and trace propagation
     this.client.interceptors.request.use(
       (config) => {
-        this.logger.debug(`${config.method?.toUpperCase()} ${config.baseURL}${config.url}`);
+        // Propagate trace context to downstream services
+        const activeContext = context.active();
+        const span = trace.getActiveSpan();
+        
+        if (span) {
+          // Inject trace context into headers (adds traceparent header)
+          propagation.inject(activeContext, config.headers);
+          
+          const traceId = span.spanContext().traceId;
+          const spanId = span.spanContext().spanId;
+          
+          this.logger.debug(`${config.method?.toUpperCase()} ${config.baseURL}${config.url}`, {
+            traceId,
+            spanId,
+          });
+        } else {
+          this.logger.debug(`${config.method?.toUpperCase()} ${config.baseURL}${config.url}`);
+        }
+        
         return config;
       },
       (error) => {

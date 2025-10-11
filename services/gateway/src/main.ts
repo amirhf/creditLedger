@@ -1,3 +1,8 @@
+// IMPORTANT: Initialize tracing BEFORE any other imports
+// This ensures auto-instrumentation can patch HTTP modules
+import { initTracing } from './tracing';
+initTracing();
+
 import { NestFactory } from '@nestjs/core';
 import { AppModule } from './app.module';
 import { AllExceptionsFilter } from './filters/http-exception.filter';
@@ -35,6 +40,7 @@ async function bootstrap() {
   logger.log(`  ACCOUNTS_SERVICE_URL: ${process.env.ACCOUNTS_SERVICE_URL || 'http://localhost:7101'}`);
   logger.log(`  ORCHESTRATOR_SERVICE_URL: ${process.env.ORCHESTRATOR_SERVICE_URL || 'http://localhost:7103'}`);
   logger.log(`  READMODEL_SERVICE_URL: ${process.env.READMODEL_SERVICE_URL || 'http://localhost:7104'}`);
+  logger.log(`  OTEL_EXPORTER_OTLP_ENDPOINT: ${process.env.OTEL_EXPORTER_OTLP_ENDPOINT || 'http://localhost:4318'}`);
 }
 
 bootstrap();
