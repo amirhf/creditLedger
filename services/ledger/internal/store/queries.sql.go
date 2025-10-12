@@ -7,6 +7,7 @@ package store
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"time"
 
@@ -17,7 +18,7 @@ const createJournalEntry = `-- name: CreateJournalEntry :one
 
 INSERT INTO journal_entries (entry_id, batch_id, ts)
 VALUES ($1, $2, $3)
-RETURNING entry_id, batch_id, ts
+RETURNING entry_id, batch_id, ts, voided_by, voided_at, void_reason
 `
 
 type CreateJournalEntryParams struct {
@@ -30,7 +31,14 @@ type CreateJournalEntryParams struct {
 func (q *Queries) CreateJournalEntry(ctx context.Context, arg CreateJournalEntryParams) (JournalEntry, error) {
 	row := q.db.QueryRowContext(ctx, createJournalEntry, arg.EntryID, arg.BatchID, arg.Ts)
 	var i JournalEntry
-	err := row.Scan(&i.EntryID, &i.BatchID, &i.Ts)
+	err := row.Scan(
+		&i.EntryID,
+		&i.BatchID,
+		&i.Ts,
+		&i.VoidedBy,
+		&i.VoidedAt,
+		&i.VoidReason,
+	)
 	return i, err
 }
 
@@ -109,8 +117,50 @@ func (q *Queries) CreateOutboxEvent(ctx context.Context, arg CreateOutboxEventPa
 	return i, err
 }
 
+const getActiveEntryByBatch = `-- name: GetActiveEntryByBatch :one
+SELECT entry_id, batch_id, ts, voided_by, voided_at, void_reason FROM journal_entries
+WHERE batch_id = $1
+  AND voided_by IS NULL
+LIMIT 1
+`
+
+func (q *Queries) GetActiveEntryByBatch(ctx context.Context, batchID uuid.UUID) (JournalEntry, error) {
+	row := q.db.QueryRowContext(ctx, getActiveEntryByBatch, batchID)
+	var i JournalEntry
+	err := row.Scan(
+		&i.EntryID,
+		&i.BatchID,
+		&i.Ts,
+		&i.VoidedBy,
+		&i.VoidedAt,
+		&i.VoidReason,
+	)
+	return i, err
+}
+
+const getEntryByBatch = `-- name: GetEntryByBatch :one
+SELECT entry_id, batch_id, ts, voided_by, voided_at, void_reason FROM journal_entries
+WHERE batch_id = $1
+ORDER BY ts ASC
+LIMIT 1
+`
+
+func (q *Queries) GetEntryByBatch(ctx context.Context, batchID uuid.UUID) (JournalEntry, error) {
+	row := q.db.QueryRowContext(ctx, getEntryByBatch, batchID)
+	var i JournalEntry
+	err := row.Scan(
+		&i.EntryID,
+		&i.BatchID,
+		&i.Ts,
+		&i.VoidedBy,
+		&i.VoidedAt,
+		&i.VoidReason,
+	)
+	return i, err
+}
+
 const getJournalEntriesByBatch = `-- name: GetJournalEntriesByBatch :many
-SELECT entry_id, batch_id, ts FROM journal_entries
+SELECT entry_id, batch_id, ts, voided_by, voided_at, void_reason FROM journal_entries
 WHERE batch_id = $1
 ORDER BY ts
 `
@@ -124,7 +174,14 @@ func (q *Queries) GetJournalEntriesByBatch(ctx context.Context, batchID uuid.UUI
 	var items []JournalEntry
 	for rows.Next() {
 		var i JournalEntry
-		if err := rows.Scan(&i.EntryID, &i.BatchID, &i.Ts); err != nil {
+		if err := rows.Scan(
+			&i.EntryID,
+			&i.BatchID,
+			&i.Ts,
+			&i.VoidedBy,
+			&i.VoidedAt,
+			&i.VoidReason,
+		); err != nil {
 			return nil, err
 		}
 		items = append(items, i)
@@ -139,14 +196,21 @@ func (q *Queries) GetJournalEntriesByBatch(ctx context.Context, batchID uuid.UUI
 }
 
 const getJournalEntry = `-- name: GetJournalEntry :one
-SELECT entry_id, batch_id, ts FROM journal_entries
+SELECT entry_id, batch_id, ts, voided_by, voided_at, void_reason FROM journal_entries
 WHERE entry_id = $1
 `
 
 func (q *Queries) GetJournalEntry(ctx context.Context, entryID uuid.UUID) (JournalEntry, error) {
 	row := q.db.QueryRowContext(ctx, getJournalEntry, entryID)
 	var i JournalEntry
-	err := row.Scan(&i.EntryID, &i.BatchID, &i.Ts)
+	err := row.Scan(
+		&i.EntryID,
+		&i.BatchID,
+		&i.Ts,
+		&i.VoidedBy,
+		&i.VoidedAt,
+		&i.VoidReason,
+	)
 	return i, err
 }
 
@@ -297,6 +361,39 @@ func (q *Queries) GetUnsentOutboxEvents(ctx context.Context, limit int32) ([]Out
 		return nil, err
 	}
 	return items, nil
+}
+
+const isEntryVoided = `-- name: IsEntryVoided :one
+SELECT EXISTS(
+  SELECT 1 FROM journal_entries
+  WHERE entry_id = $1 AND voided_by IS NOT NULL
+) AS is_voided
+`
+
+func (q *Queries) IsEntryVoided(ctx context.Context, entryID uuid.UUID) (bool, error) {
+	row := q.db.QueryRowContext(ctx, isEntryVoided, entryID)
+	var is_voided bool
+	err := row.Scan(&is_voided)
+	return is_voided, err
+}
+
+const markEntryVoided = `-- name: MarkEntryVoided :exec
+
+UPDATE journal_entries
+SET voided_by = $2, voided_at = now(), void_reason = $3
+WHERE entry_id = $1
+`
+
+type MarkEntryVoidedParams struct {
+	EntryID    uuid.UUID
+	VoidedBy   uuid.NullUUID
+	VoidReason sql.NullString
+}
+
+// Void Operations (SAGA Compensation)
+func (q *Queries) MarkEntryVoided(ctx context.Context, arg MarkEntryVoidedParams) error {
+	_, err := q.db.ExecContext(ctx, markEntryVoided, arg.EntryID, arg.VoidedBy, arg.VoidReason)
+	return err
 }
 
 const markOutboxEventSent = `-- name: MarkOutboxEventSent :exec

@@ -56,3 +56,28 @@ WHERE id = $1;
 -- name: GetOutboxEvent :one
 SELECT * FROM outbox
 WHERE id = $1;
+
+-- Void Operations (SAGA Compensation)
+
+-- name: MarkEntryVoided :exec
+UPDATE journal_entries
+SET voided_by = $2, voided_at = now(), void_reason = $3
+WHERE entry_id = $1;
+
+-- name: GetEntryByBatch :one
+SELECT * FROM journal_entries
+WHERE batch_id = $1
+ORDER BY ts ASC
+LIMIT 1;
+
+-- name: GetActiveEntryByBatch :one
+SELECT * FROM journal_entries
+WHERE batch_id = $1
+  AND voided_by IS NULL
+LIMIT 1;
+
+-- name: IsEntryVoided :one
+SELECT EXISTS(
+  SELECT 1 FROM journal_entries
+  WHERE entry_id = $1 AND voided_by IS NOT NULL
+) AS is_voided;

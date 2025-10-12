@@ -146,3 +146,54 @@ func NewEntry(batchID uuid.UUID, lines []Line) (*Entry, error) {
 
 	return entry, nil
 }
+
+// CreateVoidEntry creates a compensating entry that reverses the original entry
+// This implements the compensation pattern for SAGA transactions
+func CreateVoidEntry(originalEntry *Entry, reason string) (*Entry, error) {
+	if originalEntry == nil {
+		return nil, ValidationError{
+			Field:   "original_entry",
+			Message: "original entry cannot be nil",
+		}
+	}
+
+	if reason == "" {
+		return nil, ValidationError{
+			Field:   "reason",
+			Message: "void reason cannot be empty",
+		}
+	}
+
+	// Create reversed lines (swap DEBIT <-> CREDIT)
+	reversedLines := make([]Line, len(originalEntry.Lines))
+	for i, line := range originalEntry.Lines {
+		reversedLines[i] = Line{
+			AccountID:   line.AccountID,
+			AmountMinor: line.AmountMinor,
+			Side:        reverseSide(line.Side),
+		}
+	}
+
+	// Create void entry with same batch_id (for traceability)
+	voidEntry := &Entry{
+		EntryID:   uuid.New(),
+		BatchID:   originalEntry.BatchID,
+		Lines:     reversedLines,
+		Timestamp: time.Now(),
+	}
+
+	// Validate the void entry (should always pass if original was valid)
+	if err := voidEntry.Validate(); err != nil {
+		return nil, fmt.Errorf("void entry validation failed: %w", err)
+	}
+
+	return voidEntry, nil
+}
+
+// reverseSide swaps DEBIT and CREDIT
+func reverseSide(side Side) Side {
+	if side == SideDebit {
+		return SideCredit
+	}
+	return SideDebit
+}

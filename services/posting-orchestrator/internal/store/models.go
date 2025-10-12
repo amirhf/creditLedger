@@ -35,4 +35,20 @@ type Transfer struct {
 	FailureReason  sql.NullString `json:"failure_reason"`
 	CreatedAt      time.Time      `json:"created_at"`
 	UpdatedAt      time.Time      `json:"updated_at"`
+	// Transfer lifecycle state: INITIATED, LEDGER_CALLED, COMPLETED, RECOVERING, COMPENSATING, COMPENSATED, FAILED
+	State sql.NullString `json:"state"`
+	// Timestamp when ledger HTTP call was made
+	LedgerCallAt sql.NullTime `json:"ledger_call_at"`
+	// Journal entry ID returned by ledger service
+	LedgerEntryID uuid.NullUUID `json:"ledger_entry_id"`
+	// Full HTTP response from ledger (for debugging)
+	LedgerResponse sql.NullString `json:"ledger_response"`
+	// Number of times compensation was attempted
+	CompensationAttempts sql.NullInt32 `json:"compensation_attempts"`
+	// Timestamp when compensation completed successfully
+	CompensatedAt sql.NullTime `json:"compensated_at"`
+	// Number of times recovery was attempted
+	RecoveryAttempts sql.NullInt32 `json:"recovery_attempts"`
+	// Timestamp of last recovery attempt
+	LastRecoveryAt sql.NullTime `json:"last_recovery_at"`
 }

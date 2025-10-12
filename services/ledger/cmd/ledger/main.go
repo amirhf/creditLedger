@@ -101,6 +101,8 @@ func main() {
 	r.Get("/healthz", func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(http.StatusOK) })
 	r.Handle("/metrics", promhttp.Handler())
 	r.Post("/v1/entries", handler.CreateEntry)
+	r.Post("/v1/entries/{id}/void", handler.VoidEntry)
+	r.Get("/v1/entries/by-batch/{batch_id}", handler.GetEntryByBatch)
 
 	// Setup HTTP server
 	addr := ":7102"

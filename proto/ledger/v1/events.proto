@@ -24,3 +24,11 @@ message EntryPosted {
 message TransferInitiated { string transfer_id = 1; string from = 2; string to = 3; Money amount = 4; string idem_key = 5; int64 ts_unix_ms = 6; }
 message TransferCompleted { string transfer_id = 1; int64 ts_unix_ms = 2; }
 message TransferFailed { string transfer_id = 1; string reason = 2; int64 ts_unix_ms = 3; }
+
+
+message EntryVoided {
+  string original_entry_id = 1;
+  string void_entry_id = 2;
+  string void_reason = 3;
+  int64 ts_unix_ms = 4;
+}

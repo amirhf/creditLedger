@@ -6,6 +6,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"io"
 	"log"
 	"net/http"
 	"time"
@@ -13,6 +14,7 @@ import (
 	ledgerv1 "github.com/amirhf/credit-ledger/proto/gen/go/ledger/v1"
 	"github.com/amirhf/credit-ledger/services/posting-orchestrator/internal/domain"
 	"github.com/amirhf/credit-ledger/services/posting-orchestrator/internal/idem"
+	"github.com/amirhf/credit-ledger/services/posting-orchestrator/internal/resilience"
 	"github.com/amirhf/credit-ledger/services/posting-orchestrator/internal/store"
 	"github.com/google/uuid"
 	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
@@ -61,12 +63,14 @@ type LedgerEntryResponse struct {
 
 // Handler handles HTTP requests for the orchestrator service
 type Handler struct {
-	db          *sql.DB
-	queries     *store.Queries
-	idemGuard   *idem.Guard
-	ledgerURL   string
-	httpClient  *http.Client
-	logger      *log.Logger
+	db             *sql.DB
+	queries        *store.Queries
+	idemGuard      *idem.Guard
+	ledgerURL      string
+	httpClient     *http.Client
+	logger         *log.Logger
+	circuitBreaker *resilience.CircuitBreaker
+	retryConfig    resilience.RetryConfig
 }
 
 // NewHandler creates a new HTTP handler
@@ -80,7 +84,9 @@ func NewHandler(db *sql.DB, idemGuard *idem.Guard, ledgerURL string, logger *log
 			Timeout:   10 * time.Second,
 			Transport: otelhttp.NewTransport(http.DefaultTransport),
 		},
-		logger: logger,
+		logger:         logger,
+		circuitBreaker: resilience.NewCircuitBreaker(resilience.DefaultCircuitBreakerConfig(), logger),
+		retryConfig:    resilience.DefaultRetryConfig(),
 	}
 }
 
@@ -225,8 +231,18 @@ func (h *Handler) executeTransfer(ctx context.Context, transfer *domain.Transfer
 		return fmt.Errorf("failed to commit transaction: %w", err)
 	}
 
+	// Record that we're about to call the ledger (enables compensator recovery)
+	ledgerCallTime := time.Now()
+	if err := h.queries.RecordLedgerCall(ctx, store.RecordLedgerCallParams{
+		ID:           transfer.ID,
+		LedgerCallAt: sql.NullTime{Time: ledgerCallTime, Valid: true},
+	}); err != nil {
+		h.logger.Printf("Failed to record ledger call: %v", err)
+		// Continue anyway - this is just for recovery tracking
+	}
+
 	// Call ledger service to create journal entry
-	entryID, err := h.callLedgerService(ctx, transfer)
+	entryID, ledgerResponse, err := h.callLedgerService(ctx, transfer)
 	if err != nil {
 		// Mark transfer as failed
 		if err := h.markTransferFailed(ctx, transfer.ID, err.Error()); err != nil {
@@ -235,8 +251,8 @@ func (h *Handler) executeTransfer(ctx context.Context, transfer *domain.Transfer
 		return fmt.Errorf("ledger service call failed: %w", err)
 	}
 
-	// Mark transfer as completed
-	if err := h.markTransferCompleted(ctx, transfer.ID, entryID); err != nil {
+	// Mark transfer as completed with ledger entry details
+	if err := h.markTransferCompletedWithResponse(ctx, transfer.ID, entryID, ledgerResponse); err != nil {
 		return fmt.Errorf("failed to mark transfer as completed: %w", err)
 	}
 
@@ -244,8 +260,33 @@ func (h *Handler) executeTransfer(ctx context.Context, transfer *domain.Transfer
 	return nil
 }
 
-// callLedgerService calls the ledger service to create a journal entry
-func (h *Handler) callLedgerService(ctx context.Context, transfer *domain.Transfer) (uuid.UUID, error) {
+// callLedgerService calls the ledger service to create a journal entry with retry and circuit breaker
+func (h *Handler) callLedgerService(ctx context.Context, transfer *domain.Transfer) (uuid.UUID, string, error) {
+	var entryID uuid.UUID
+	var respBodyStr string
+	
+	// Wrap the call with circuit breaker
+	err := h.circuitBreaker.Execute(func() error {
+		// Retry the call with exponential backoff
+		return resilience.Retry(ctx, h.retryConfig, func(ctx context.Context) error {
+			var err error
+			entryID, respBodyStr, err = h.doLedgerCall(ctx, transfer)
+			return err
+		}, h.logger)
+	})
+	
+	if err != nil {
+		// Log circuit breaker state on failure
+		state, failures, _ := h.circuitBreaker.GetMetrics()
+		h.logger.Printf("Ledger call failed (circuit: %s, failures: %d): %v", state, failures, err)
+		return uuid.Nil, respBodyStr, err
+	}
+	
+	return entryID, respBodyStr, nil
+}
+
+// doLedgerCall performs the actual HTTP call to ledger service
+func (h *Handler) doLedgerCall(ctx context.Context, transfer *domain.Transfer) (uuid.UUID, string, error) {
 	// Create ledger entry request with double-entry lines
 	batchID := transfer.ID // Use transfer ID as batch ID
 	ledgerReq := LedgerEntryRequest{
@@ -266,42 +307,94 @@ func (h *Handler) callLedgerService(ctx context.Context, transfer *domain.Transf
 
 	reqBody, err := json.Marshal(ledgerReq)
 	if err != nil {
-		return uuid.Nil, fmt.Errorf("failed to marshal request: %w", err)
+		return uuid.Nil, "", fmt.Errorf("failed to marshal request: %w", err)
 	}
 
 	// Make HTTP request to ledger service
 	req, err := http.NewRequestWithContext(ctx, "POST", h.ledgerURL+"/v1/entries", bytes.NewBuffer(reqBody))
 	if err != nil {
-		return uuid.Nil, fmt.Errorf("failed to create request: %w", err)
+		return uuid.Nil, "", fmt.Errorf("failed to create request: %w", err)
 	}
 	req.Header.Set("Content-Type", "application/json")
 
 	resp, err := h.httpClient.Do(req)
 	if err != nil {
-		return uuid.Nil, fmt.Errorf("failed to call ledger service: %w", err)
+		return uuid.Nil, "", fmt.Errorf("failed to call ledger service: %w", err)
 	}
 	defer resp.Body.Close()
 
+	// Read response body for logging/debugging
+	respBody, _ := io.ReadAll(resp.Body)
+	respBodyStr := string(respBody)
+
 	if resp.StatusCode != http.StatusCreated {
 		var errResp ErrorResponse
-		json.NewDecoder(resp.Body).Decode(&errResp)
-		return uuid.Nil, fmt.Errorf("ledger service returned %d: %s", resp.StatusCode, errResp.Message)
+		json.Unmarshal(respBody, &errResp)
+		return uuid.Nil, respBodyStr, fmt.Errorf("ledger service returned %d: %s", resp.StatusCode, errResp.Message)
 	}
 
 	var ledgerResp LedgerEntryResponse
-	if err := json.NewDecoder(resp.Body).Decode(&ledgerResp); err != nil {
-		return uuid.Nil, fmt.Errorf("failed to decode response: %w", err)
+	if err := json.Unmarshal(respBody, &ledgerResp); err != nil {
+		return uuid.Nil, respBodyStr, fmt.Errorf("failed to decode response: %w", err)
 	}
 
 	entryID, err := uuid.Parse(ledgerResp.EntryID)
 	if err != nil {
-		return uuid.Nil, fmt.Errorf("invalid entry_id in response: %w", err)
+		return uuid.Nil, respBodyStr, fmt.Errorf("invalid entry_id in response: %w", err)
 	}
 
-	return entryID, nil
+	return entryID, respBodyStr, nil
 }
 
-// markTransferCompleted marks a transfer as completed and emits event
+// markTransferCompletedWithResponse marks a transfer as completed with ledger response
+func (h *Handler) markTransferCompletedWithResponse(ctx context.Context, transferID, entryID uuid.UUID, ledgerResponse string) error {
+	tx, err := h.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+
+	qtx := h.queries.WithTx(tx)
+
+	// Update transfer with ledger entry details using RecordLedgerSuccess
+	if err := qtx.RecordLedgerSuccess(ctx, store.RecordLedgerSuccessParams{
+		ID:             transferID,
+		LedgerEntryID:  uuid.NullUUID{UUID: entryID, Valid: true},
+		LedgerResponse: sql.NullString{String: ledgerResponse, Valid: true},
+	}); err != nil {
+		return err
+	}
+
+	// Create TransferCompleted event
+	completedEvent := &ledgerv1.TransferCompleted{
+		TransferId: transferID.String(),
+		TsUnixMs:   time.Now().UnixMilli(),
+	}
+
+	completedPayload, _ := proto.Marshal(completedEvent)
+	completedHeaders := map[string]interface{}{
+		"event_name": "TransferCompleted",
+		"schema":     "ledger.v1.TransferCompleted",
+	}
+	completedHeadersJSON, _ := json.Marshal(completedHeaders)
+
+	_, err = qtx.CreateOutboxEvent(ctx, store.CreateOutboxEventParams{
+		ID:            uuid.New(),
+		AggregateType: "Transfer",
+		AggregateID:   transferID,
+		EventType:     "TransferCompleted",
+		Payload:       completedPayload,
+		Headers:       completedHeadersJSON,
+		CreatedAt:     time.Now(),
+	})
+	if err != nil {
+		return err
+	}
+
+	return tx.Commit()
+}
+
+// markTransferCompleted marks a transfer as completed and emits event (legacy)
 func (h *Handler) markTransferCompleted(ctx context.Context, transferID, entryID uuid.UUID) error {
 	tx, err := h.db.BeginTx(ctx, nil)
 	if err != nil {

@@ -11,6 +11,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/amirhf/credit-ledger/services/posting-orchestrator/internal/compensator"
 	orchestratorhttp "github.com/amirhf/credit-ledger/services/posting-orchestrator/internal/http"
 	"github.com/amirhf/credit-ledger/services/posting-orchestrator/internal/idem"
 	"github.com/amirhf/credit-ledger/services/posting-orchestrator/internal/outbox"
@@ -98,6 +99,14 @@ func main() {
 	if ledgerURL == "" {
 		ledgerURL = "http://localhost:7102" // Default for local development
 	}
+
+	// Create and start compensator worker in background
+	comp := compensator.NewCompensator(db, ledgerURL, log.Default())
+	go func() {
+		if err := comp.Start(ctx); err != nil && err != context.Canceled {
+			log.Printf("Compensator worker stopped with error: %v", err)
+		}
+	}()
 
 	// Create handler
 	handler := orchestratorhttp.NewHandler(db, idemGuard, ledgerURL, log.Default())

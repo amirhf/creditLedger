@@ -40,6 +40,20 @@ type ErrorResponse struct {
 	Message string `json:"message,omitempty"`
 }
 
+// VoidEntryRequest represents the request to void an entry
+type VoidEntryRequest struct {
+	Reason     string `json:"reason"`
+	TransferID string `json:"transfer_id,omitempty"`
+}
+
+// VoidEntryResponse represents the response after voiding an entry
+type VoidEntryResponse struct {
+	OriginalEntryID string `json:"original_entry_id"`
+	VoidEntryID     string `json:"void_entry_id"`
+	Status          string `json:"status"`
+	VoidedAt        string `json:"voided_at"`
+}
+
 // Handler handles HTTP requests for the ledger service
 type Handler struct {
 	db      *sql.DB
@@ -252,5 +266,261 @@ func (h *Handler) respondError(w http.ResponseWriter, status int, error string, 
 	h.respondJSON(w, status, ErrorResponse{
 		Error:   error,
 		Message: message,
+	})
+}
+
+// VoidEntry handles POST /v1/entries/:id/void
+// This implements the compensation pattern for SAGA transactions
+func (h *Handler) VoidEntry(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+
+	// Extract entry ID from URL parameter
+	entryIDStr := r.PathValue("id")
+	if entryIDStr == "" {
+		h.respondError(w, http.StatusBadRequest, "invalid_entry_id", "Entry ID is required")
+		return
+	}
+
+	entryID, err := uuid.Parse(entryIDStr)
+	if err != nil {
+		h.respondError(w, http.StatusBadRequest, "invalid_entry_id", "Entry ID must be a valid UUID")
+		return
+	}
+
+	// Parse request body
+	var req VoidEntryRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		h.respondError(w, http.StatusBadRequest, "invalid_request", "Failed to parse request body")
+		return
+	}
+
+	if req.Reason == "" {
+		h.respondError(w, http.StatusBadRequest, "missing_reason", "Void reason is required")
+		return
+	}
+
+	// Start database transaction
+	tx, err := h.db.BeginTx(ctx, nil)
+	if err != nil {
+		h.logger.Printf("Failed to begin transaction: %v", err)
+		h.respondError(w, http.StatusInternalServerError, "database_error", "Failed to process void request")
+		return
+	}
+	defer tx.Rollback()
+
+	qtx := h.queries.WithTx(tx)
+
+	// Check if entry exists
+	originalEntry, err := qtx.GetJournalEntry(ctx, entryID)
+	if err != nil {
+		if err == sql.ErrNoRows {
+			h.respondError(w, http.StatusNotFound, "entry_not_found", "Journal entry not found")
+			return
+		}
+		h.logger.Printf("Failed to get journal entry: %v", err)
+		h.respondError(w, http.StatusInternalServerError, "database_error", "Failed to check entry")
+		return
+	}
+
+	// Check if already voided (idempotent)
+	isVoided, err := qtx.IsEntryVoided(ctx, entryID)
+	if err != nil {
+		h.logger.Printf("Failed to check if entry is voided: %v", err)
+		h.respondError(w, http.StatusInternalServerError, "database_error", "Failed to check void status")
+		return
+	}
+
+	if isVoided {
+		// Entry already voided - return success (idempotent)
+		h.logger.Printf("Entry %s already voided, returning success", entryID)
+		h.respondJSON(w, http.StatusOK, VoidEntryResponse{
+			OriginalEntryID: entryID.String(),
+			VoidEntryID:     originalEntry.VoidedBy.UUID.String(), // This might be nil, handle carefully
+			Status:          "already_voided",
+			VoidedAt:        originalEntry.VoidedAt.Time.Format(time.RFC3339),
+		})
+		return
+	}
+
+	// Get original entry lines
+	lines, err := qtx.GetJournalLinesByEntry(ctx, entryID)
+	if err != nil {
+		h.logger.Printf("Failed to get journal lines: %v", err)
+		h.respondError(w, http.StatusInternalServerError, "database_error", "Failed to get entry lines")
+		return
+	}
+
+	// Convert to domain lines
+	domainLines := make([]domain.Line, len(lines))
+	for i, line := range lines {
+		domainLines[i] = domain.Line{
+			AccountID:   line.AccountID,
+			AmountMinor: line.AmountMinor,
+			Side:        domain.Side(line.Side),
+		}
+	}
+
+	// Create domain entry object
+	domainEntry := &domain.Entry{
+		EntryID:   originalEntry.EntryID,
+		BatchID:   originalEntry.BatchID,
+		Lines:     domainLines,
+		Timestamp: originalEntry.Ts,
+	}
+
+	// Create void entry
+	voidEntry, err := domain.CreateVoidEntry(domainEntry, req.Reason)
+	if err != nil {
+		h.logger.Printf("Failed to create void entry: %v", err)
+		h.respondError(w, http.StatusBadRequest, "void_error", err.Error())
+		return
+	}
+
+	// Insert void journal entry
+	_, err = qtx.CreateJournalEntry(ctx, store.CreateJournalEntryParams{
+		EntryID: voidEntry.EntryID,
+		BatchID: voidEntry.BatchID,
+		Ts:      voidEntry.Timestamp,
+	})
+	if err != nil {
+		h.logger.Printf("Failed to create void journal entry: %v", err)
+		h.respondError(w, http.StatusInternalServerError, "database_error", "Failed to create void entry")
+		return
+	}
+
+	// Insert void journal lines
+	for _, line := range voidEntry.Lines {
+		_, err = qtx.CreateJournalLine(ctx, store.CreateJournalLineParams{
+			EntryID:     voidEntry.EntryID,
+			AccountID:   line.AccountID,
+			AmountMinor: line.AmountMinor,
+			Side:        string(line.Side),
+		})
+		if err != nil {
+			h.logger.Printf("Failed to create void journal line: %v", err)
+			h.respondError(w, http.StatusInternalServerError, "database_error", "Failed to create void entry lines")
+			return
+		}
+	}
+
+	// Mark original entry as voided
+	err = qtx.MarkEntryVoided(ctx, store.MarkEntryVoidedParams{
+		EntryID:    entryID,
+		VoidedBy:   uuid.NullUUID{UUID: voidEntry.EntryID, Valid: true},
+		VoidReason: sql.NullString{String: req.Reason, Valid: true},
+	})
+	if err != nil {
+		h.logger.Printf("Failed to mark entry as voided: %v", err)
+		h.respondError(w, http.StatusInternalServerError, "database_error", "Failed to mark entry as voided")
+		return
+	}
+
+	// Create EntryVoided event
+	voidedEvent := &ledgerv1.EntryVoided{
+		OriginalEntryId: entryID.String(),
+		VoidEntryId:     voidEntry.EntryID.String(),
+		VoidReason:      req.Reason,
+		TsUnixMs:        time.Now().UnixMilli(),
+	}
+
+	eventPayload, err := proto.Marshal(voidedEvent)
+	if err != nil {
+		h.logger.Printf("Failed to marshal voided event: %v", err)
+		h.respondError(w, http.StatusInternalServerError, "event_error", "Failed to serialize event")
+		return
+	}
+
+	headers := map[string]interface{}{
+		"event_name": "EntryVoided",
+		"schema":     "ledger.v1.EntryVoided",
+	}
+	headersJSON, _ := json.Marshal(headers)
+
+	_, err = qtx.CreateOutboxEvent(ctx, store.CreateOutboxEventParams{
+		ID:            uuid.New(),
+		AggregateType: "journal_entry",
+		AggregateID:   entryID,
+		EventType:     "EntryVoided",
+		Payload:       eventPayload,
+		Headers:       headersJSON,
+		CreatedAt:     time.Now(),
+	})
+	if err != nil {
+		h.logger.Printf("Failed to create outbox event: %v", err)
+		h.respondError(w, http.StatusInternalServerError, "database_error", "Failed to create outbox event")
+		return
+	}
+
+	// Commit transaction
+	if err := tx.Commit(); err != nil {
+		h.logger.Printf("Failed to commit transaction: %v", err)
+		h.respondError(w, http.StatusInternalServerError, "database_error", "Failed to commit void entry")
+		return
+	}
+
+	h.logger.Printf("Voided entry %s with void entry %s (reason: %s)", entryID, voidEntry.EntryID, req.Reason)
+
+	// Return success response
+	h.respondJSON(w, http.StatusOK, VoidEntryResponse{
+		OriginalEntryID: entryID.String(),
+		VoidEntryID:     voidEntry.EntryID.String(),
+		Status:          "voided",
+		VoidedAt:        time.Now().Format(time.RFC3339),
+	})
+}
+
+// GetEntryByBatch handles GET /v1/entries/by-batch/:batch_id
+// Used by compensator to check if an entry exists for a transfer
+func (h *Handler) GetEntryByBatch(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+
+	// Extract batch ID from URL parameter
+	batchIDStr := r.PathValue("batch_id")
+	if batchIDStr == "" {
+		h.respondError(w, http.StatusBadRequest, "invalid_batch_id", "Batch ID is required")
+		return
+	}
+
+	batchID, err := uuid.Parse(batchIDStr)
+	if err != nil {
+		h.respondError(w, http.StatusBadRequest, "invalid_batch_id", "Batch ID must be a valid UUID")
+		return
+	}
+
+	// Query entry by batch ID
+	entry, err := h.queries.GetEntryByBatch(ctx, batchID)
+	if err != nil {
+		if err == sql.ErrNoRows {
+			h.respondError(w, http.StatusNotFound, "entry_not_found", "No entry found for this batch ID")
+			return
+		}
+		h.logger.Printf("Failed to get entry by batch: %v", err)
+		h.respondError(w, http.StatusInternalServerError, "database_error", "Failed to query entry")
+		return
+	}
+
+	// Get entry lines
+	lines, err := h.queries.GetJournalLinesByEntry(ctx, entry.EntryID)
+	if err != nil {
+		h.logger.Printf("Failed to get journal lines: %v", err)
+		h.respondError(w, http.StatusInternalServerError, "database_error", "Failed to get entry lines")
+		return
+	}
+
+	// Build response
+	lineResponses := make([]LineRequest, len(lines))
+	for i, line := range lines {
+		lineResponses[i] = LineRequest{
+			AccountID:   line.AccountID.String(),
+			AmountMinor: line.AmountMinor,
+			Side:        line.Side,
+		}
+	}
+
+	h.respondJSON(w, http.StatusOK, map[string]interface{}{
+		"entry_id": entry.EntryID.String(),
+		"batch_id": entry.BatchID.String(),
+		"lines":    lineResponses,
+		"voided":   entry.VoidedBy.Valid,
 	})
 }

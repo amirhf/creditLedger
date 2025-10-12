@@ -16,6 +16,12 @@ type JournalEntry struct {
 	EntryID uuid.UUID
 	BatchID uuid.UUID
 	Ts      time.Time
+	// References the entry_id of the void entry that reversed this entry
+	VoidedBy uuid.NullUUID
+	// Timestamp when this entry was voided
+	VoidedAt sql.NullTime
+	// Reason for voiding (e.g., transfer_failed, transfer_rollback)
+	VoidReason sql.NullString
 }
 
 type JournalLine struct {

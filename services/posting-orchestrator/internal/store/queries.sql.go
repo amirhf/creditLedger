@@ -60,7 +60,7 @@ const createTransfer = `-- name: CreateTransfer :one
 
 INSERT INTO transfers (id, from_account_id, to_account_id, amount_minor, currency, idempotency_key, status, created_at, updated_at)
 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
-RETURNING id, from_account_id, to_account_id, amount_minor, currency, idempotency_key, status, entry_id, failure_reason, created_at, updated_at
+RETURNING id, from_account_id, to_account_id, amount_minor, currency, idempotency_key, status, entry_id, failure_reason, created_at, updated_at, state, ledger_call_at, ledger_entry_id, ledger_response, compensation_attempts, compensated_at, recovery_attempts, last_recovery_at
 `
 
 type CreateTransferParams struct {
@@ -101,6 +101,14 @@ func (q *Queries) CreateTransfer(ctx context.Context, arg CreateTransferParams) 
 		&i.FailureReason,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.State,
+		&i.LedgerCallAt,
+		&i.LedgerEntryID,
+		&i.LedgerResponse,
+		&i.CompensationAttempts,
+		&i.CompensatedAt,
+		&i.RecoveryAttempts,
+		&i.LastRecoveryAt,
 	)
 	return i, err
 }
@@ -126,8 +134,60 @@ func (q *Queries) GetOutboxEvent(ctx context.Context, id uuid.UUID) (Outbox, err
 	return i, err
 }
 
+const getStaleTransfers = `-- name: GetStaleTransfers :many
+SELECT id, from_account_id, to_account_id, amount_minor, currency, idempotency_key, status, entry_id, failure_reason, created_at, updated_at, state, ledger_call_at, ledger_entry_id, ledger_response, compensation_attempts, compensated_at, recovery_attempts, last_recovery_at FROM transfers
+WHERE state IN ('LEDGER_CALLED', 'RECOVERING')
+  AND ledger_call_at < $1
+  AND recovery_attempts < 5
+ORDER BY ledger_call_at ASC
+LIMIT 100
+`
+
+func (q *Queries) GetStaleTransfers(ctx context.Context, ledgerCallAt sql.NullTime) ([]Transfer, error) {
+	rows, err := q.db.QueryContext(ctx, getStaleTransfers, ledgerCallAt)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []Transfer
+	for rows.Next() {
+		var i Transfer
+		if err := rows.Scan(
+			&i.ID,
+			&i.FromAccountID,
+			&i.ToAccountID,
+			&i.AmountMinor,
+			&i.Currency,
+			&i.IdempotencyKey,
+			&i.Status,
+			&i.EntryID,
+			&i.FailureReason,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+			&i.State,
+			&i.LedgerCallAt,
+			&i.LedgerEntryID,
+			&i.LedgerResponse,
+			&i.CompensationAttempts,
+			&i.CompensatedAt,
+			&i.RecoveryAttempts,
+			&i.LastRecoveryAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const getTransfer = `-- name: GetTransfer :one
-SELECT id, from_account_id, to_account_id, amount_minor, currency, idempotency_key, status, entry_id, failure_reason, created_at, updated_at FROM transfers WHERE id = $1 LIMIT 1
+SELECT id, from_account_id, to_account_id, amount_minor, currency, idempotency_key, status, entry_id, failure_reason, created_at, updated_at, state, ledger_call_at, ledger_entry_id, ledger_response, compensation_attempts, compensated_at, recovery_attempts, last_recovery_at FROM transfers WHERE id = $1 LIMIT 1
 `
 
 func (q *Queries) GetTransfer(ctx context.Context, id uuid.UUID) (Transfer, error) {
@@ -145,12 +205,20 @@ func (q *Queries) GetTransfer(ctx context.Context, id uuid.UUID) (Transfer, erro
 		&i.FailureReason,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.State,
+		&i.LedgerCallAt,
+		&i.LedgerEntryID,
+		&i.LedgerResponse,
+		&i.CompensationAttempts,
+		&i.CompensatedAt,
+		&i.RecoveryAttempts,
+		&i.LastRecoveryAt,
 	)
 	return i, err
 }
 
 const getTransferByIdempotencyKey = `-- name: GetTransferByIdempotencyKey :one
-SELECT id, from_account_id, to_account_id, amount_minor, currency, idempotency_key, status, entry_id, failure_reason, created_at, updated_at FROM transfers WHERE idempotency_key = $1 LIMIT 1
+SELECT id, from_account_id, to_account_id, amount_minor, currency, idempotency_key, status, entry_id, failure_reason, created_at, updated_at, state, ledger_call_at, ledger_entry_id, ledger_response, compensation_attempts, compensated_at, recovery_attempts, last_recovery_at FROM transfers WHERE idempotency_key = $1 LIMIT 1
 `
 
 func (q *Queries) GetTransferByIdempotencyKey(ctx context.Context, idempotencyKey string) (Transfer, error) {
@@ -168,8 +236,71 @@ func (q *Queries) GetTransferByIdempotencyKey(ctx context.Context, idempotencyKe
 		&i.FailureReason,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.State,
+		&i.LedgerCallAt,
+		&i.LedgerEntryID,
+		&i.LedgerResponse,
+		&i.CompensationAttempts,
+		&i.CompensatedAt,
+		&i.RecoveryAttempts,
+		&i.LastRecoveryAt,
 	)
 	return i, err
+}
+
+const getTransfersByState = `-- name: GetTransfersByState :many
+SELECT id, from_account_id, to_account_id, amount_minor, currency, idempotency_key, status, entry_id, failure_reason, created_at, updated_at, state, ledger_call_at, ledger_entry_id, ledger_response, compensation_attempts, compensated_at, recovery_attempts, last_recovery_at FROM transfers
+WHERE state = $1
+ORDER BY created_at DESC
+LIMIT $2
+`
+
+type GetTransfersByStateParams struct {
+	State sql.NullString `json:"state"`
+	Limit int32          `json:"limit"`
+}
+
+func (q *Queries) GetTransfersByState(ctx context.Context, arg GetTransfersByStateParams) ([]Transfer, error) {
+	rows, err := q.db.QueryContext(ctx, getTransfersByState, arg.State, arg.Limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []Transfer
+	for rows.Next() {
+		var i Transfer
+		if err := rows.Scan(
+			&i.ID,
+			&i.FromAccountID,
+			&i.ToAccountID,
+			&i.AmountMinor,
+			&i.Currency,
+			&i.IdempotencyKey,
+			&i.Status,
+			&i.EntryID,
+			&i.FailureReason,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+			&i.State,
+			&i.LedgerCallAt,
+			&i.LedgerEntryID,
+			&i.LedgerResponse,
+			&i.CompensationAttempts,
+			&i.CompensatedAt,
+			&i.RecoveryAttempts,
+			&i.LastRecoveryAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
 }
 
 const getUnsentOutboxEvents = `-- name: GetUnsentOutboxEvents :many
@@ -212,6 +343,19 @@ func (q *Queries) GetUnsentOutboxEvents(ctx context.Context, limit int32) ([]Out
 	return items, nil
 }
 
+const incrementRecoveryAttempt = `-- name: IncrementRecoveryAttempt :exec
+UPDATE transfers
+SET recovery_attempts = recovery_attempts + 1,
+    last_recovery_at = now(),
+    updated_at = now()
+WHERE id = $1
+`
+
+func (q *Queries) IncrementRecoveryAttempt(ctx context.Context, id uuid.UUID) error {
+	_, err := q.db.ExecContext(ctx, incrementRecoveryAttempt, id)
+	return err
+}
+
 const markOutboxEventSent = `-- name: MarkOutboxEventSent :exec
 UPDATE outbox
 SET sent_at = now()
@@ -223,9 +367,83 @@ func (q *Queries) MarkOutboxEventSent(ctx context.Context, id uuid.UUID) error {
 	return err
 }
 
+const markTransferCompensated = `-- name: MarkTransferCompensated :exec
+UPDATE transfers
+SET state = 'COMPENSATED',
+    compensated_at = now(),
+    updated_at = now()
+WHERE id = $1
+`
+
+func (q *Queries) MarkTransferCompensated(ctx context.Context, id uuid.UUID) error {
+	_, err := q.db.ExecContext(ctx, markTransferCompensated, id)
+	return err
+}
+
+const markTransferCompensating = `-- name: MarkTransferCompensating :exec
+UPDATE transfers
+SET state = 'COMPENSATING',
+    compensation_attempts = compensation_attempts + 1,
+    updated_at = now()
+WHERE id = $1
+`
+
+func (q *Queries) MarkTransferCompensating(ctx context.Context, id uuid.UUID) error {
+	_, err := q.db.ExecContext(ctx, markTransferCompensating, id)
+	return err
+}
+
+const markTransferRecovering = `-- name: MarkTransferRecovering :exec
+UPDATE transfers
+SET state = 'RECOVERING',
+    updated_at = now()
+WHERE id = $1 AND state = 'LEDGER_CALLED'
+`
+
+func (q *Queries) MarkTransferRecovering(ctx context.Context, id uuid.UUID) error {
+	_, err := q.db.ExecContext(ctx, markTransferRecovering, id)
+	return err
+}
+
+const recordLedgerCall = `-- name: RecordLedgerCall :exec
+UPDATE transfers
+SET state = 'LEDGER_CALLED', ledger_call_at = $2, updated_at = now()
+WHERE id = $1
+`
+
+type RecordLedgerCallParams struct {
+	ID           uuid.UUID    `json:"id"`
+	LedgerCallAt sql.NullTime `json:"ledger_call_at"`
+}
+
+func (q *Queries) RecordLedgerCall(ctx context.Context, arg RecordLedgerCallParams) error {
+	_, err := q.db.ExecContext(ctx, recordLedgerCall, arg.ID, arg.LedgerCallAt)
+	return err
+}
+
+const recordLedgerSuccess = `-- name: RecordLedgerSuccess :exec
+UPDATE transfers
+SET state = 'COMPLETED', 
+    ledger_entry_id = $2, 
+    ledger_response = $3,
+    updated_at = now()
+WHERE id = $1
+`
+
+type RecordLedgerSuccessParams struct {
+	ID             uuid.UUID      `json:"id"`
+	LedgerEntryID  uuid.NullUUID  `json:"ledger_entry_id"`
+	LedgerResponse sql.NullString `json:"ledger_response"`
+}
+
+func (q *Queries) RecordLedgerSuccess(ctx context.Context, arg RecordLedgerSuccessParams) error {
+	_, err := q.db.ExecContext(ctx, recordLedgerSuccess, arg.ID, arg.LedgerEntryID, arg.LedgerResponse)
+	return err
+}
+
 const updateTransferCompleted = `-- name: UpdateTransferCompleted :exec
 UPDATE transfers
-SET status = 'COMPLETED', entry_id = $2, updated_at = now()
+SET status = 'COMPLETED', state = 'COMPLETED', entry_id = $2, updated_at = now()
 WHERE id = $1
 `
 
@@ -241,7 +459,7 @@ func (q *Queries) UpdateTransferCompleted(ctx context.Context, arg UpdateTransfe
 
 const updateTransferFailed = `-- name: UpdateTransferFailed :exec
 UPDATE transfers
-SET status = 'FAILED', failure_reason = $2, updated_at = now()
+SET status = 'FAILED', state = 'FAILED', failure_reason = $2, updated_at = now()
 WHERE id = $1
 `
 
@@ -252,5 +470,23 @@ type UpdateTransferFailedParams struct {
 
 func (q *Queries) UpdateTransferFailed(ctx context.Context, arg UpdateTransferFailedParams) error {
 	_, err := q.db.ExecContext(ctx, updateTransferFailed, arg.ID, arg.FailureReason)
+	return err
+}
+
+const updateTransferState = `-- name: UpdateTransferState :exec
+
+UPDATE transfers
+SET state = $2, updated_at = now()
+WHERE id = $1
+`
+
+type UpdateTransferStateParams struct {
+	ID    uuid.UUID      `json:"id"`
+	State sql.NullString `json:"state"`
+}
+
+// SAGA State Management Operations
+func (q *Queries) UpdateTransferState(ctx context.Context, arg UpdateTransferStateParams) error {
+	_, err := q.db.ExecContext(ctx, updateTransferState, arg.ID, arg.State)
 	return err
 }
