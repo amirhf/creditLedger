@@ -1,0 +1,50 @@
+# Build stage
+FROM node:20-alpine AS builder
+
+WORKDIR /build
+
+# Copy package files
+COPY services/gateway/package.json services/gateway/package-lock.json ./
+
+# Install ALL dependencies (needed for build)
+RUN npm ci && \
+    npm cache clean --force
+
+# Copy source code
+COPY services/gateway/ .
+
+# Build TypeScript
+RUN npm run build
+
+# Runtime stage
+FROM node:20-alpine
+
+# Install curl for health checks
+RUN apk --no-cache add curl
+
+WORKDIR /app
+
+# Copy package files for production install
+COPY services/gateway/package.json services/gateway/package-lock.json ./
+
+# Install ONLY production dependencies
+RUN npm ci --omit=dev && \
+    npm cache clean --force
+
+# Copy built files from builder
+COPY --from=builder /build/dist ./dist
+
+# Create non-root user
+RUN addgroup -g 1001 appuser && \
+    adduser -D -u 1001 -G appuser appuser && \
+    chown -R appuser:appuser /app
+
+USER appuser
+
+EXPOSE 4000
+
+# Health check
+HEALTHCHECK --interval=30s --timeout=3s --start-period=15s --retries=3 \
+    CMD curl -f http://localhost:4000/healthz || exit 1
+
+CMD ["node", "dist/main.js"]

@@ -1,0 +1,61 @@
+# Build stage
+FROM golang:1.24-alpine AS builder
+
+# Set Go environment variables
+ENV GOPROXY=https://proxy.golang.org,direct \
+    GO111MODULE=on \
+    CGO_ENABLED=0 \
+    GOOS=linux
+
+WORKDIR /build
+
+# Install build dependencies
+RUN apk add --no-cache git
+
+# Copy Go workspace files first (for better caching)
+COPY go.work go.work.sum ./
+
+# Copy proto module (required by workspace)
+COPY proto/ ./proto/
+
+# Copy ALL service modules (required by go.work)
+COPY services/ ./services/
+
+# Copy tests (referenced in go.work)
+COPY tests/ ./tests/
+
+# Download dependencies with retry
+WORKDIR /build/services/accounts
+RUN \
+    --mount=type=cache,target=/go/pkg/mod \
+    --mount=type=cache,target=/root/.cache/go-build \
+    go mod download -x
+
+# Build binary
+RUN CGO_ENABLED=0 GOOS=linux go build \
+    -ldflags="-w -s" \
+    -a -installsuffix cgo \
+    -o /build/bin/accounts \
+    ./cmd/accounts
+
+# Runtime stage
+FROM alpine:latest
+
+RUN apk --no-cache add ca-certificates curl
+
+WORKDIR /app
+
+COPY --from=builder /build/bin/accounts .
+
+RUN addgroup -g 1001 appuser && \
+    adduser -D -u 1001 -G appuser appuser && \
+    chown -R appuser:appuser /app
+
+USER appuser
+
+EXPOSE 7101
+
+HEALTHCHECK --interval=30s --timeout=3s --start-period=10s --retries=3 \
+    CMD curl -f http://localhost:7101/healthz || exit 1
+
+CMD ["./accounts"]

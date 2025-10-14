@@ -4,7 +4,9 @@ go 1.24
 
 require (
 	github.com/amirhf/credit-ledger/proto v0.0.0
+	github.com/amirhf/credit-ledger/services/common v0.0.0
 	github.com/go-chi/chi/v5 v5.1.0
+	github.com/golang-migrate/migrate/v4 v4.17.0
 	github.com/google/uuid v1.6.0
 	github.com/lib/pq v1.10.9
 	github.com/prometheus/client_golang v1.19.1
@@ -31,4 +33,7 @@ require (
 	golang.org/x/sys v0.17.0 // indirect
 )
 
-replace github.com/amirhf/credit-ledger/proto => ../../proto
+replace (
+	github.com/amirhf/credit-ledger/proto => ../../proto
+	github.com/amirhf/credit-ledger/services/common => ../common
+)

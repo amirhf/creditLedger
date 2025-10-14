@@ -3,7 +3,9 @@ module github.com/amirhf/credit-ledger/services/ledger
 go 1.24
 
 require (
+	github.com/amirhf/credit-ledger/services/common v0.0.0
 	github.com/go-chi/chi/v5 v5.1.0
+	github.com/golang-migrate/migrate/v4 v4.17.0
 	github.com/google/uuid v1.6.0
 	github.com/lib/pq v1.10.9
 	github.com/prometheus/client_golang v1.19.1
@@ -40,3 +42,5 @@ require (
 	google.golang.org/genproto/googleapis/rpc v0.0.0-20230822172742-b8732ec3820d // indirect
 	google.golang.org/grpc v1.59.0 // indirect
 )
+
+replace github.com/amirhf/credit-ledger/services/common => ../common

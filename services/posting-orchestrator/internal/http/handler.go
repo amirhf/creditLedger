@@ -127,14 +127,12 @@ func (h *Handler) CreateTransfer(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Try to claim idempotency key in Redis
+	// Try to claim idempotency key in Redis (optional, falls back to database)
 	claimed, err := h.idemGuard.Claim(ctx, fmt.Sprintf("transfer:%s", req.IdempotencyKey), 5*time.Minute)
 	if err != nil {
-		h.logger.Printf("Failed to claim idempotency key: %v", err)
-		h.respondError(w, http.StatusInternalServerError, "internal_error", "Failed to process transfer")
-		return
-	}
-	if !claimed {
+		// Redis is unavailable, log warning and continue (database idempotency check already passed)
+		h.logger.Printf("Redis unavailable for idempotency check (continuing with database fallback): %v", err)
+	} else if !claimed {
 		// Another request is processing this idempotency key
 		h.respondError(w, http.StatusConflict, "duplicate_request", "Transfer with this idempotency key is already being processed")
 		return

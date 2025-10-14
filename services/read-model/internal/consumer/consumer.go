@@ -2,14 +2,19 @@ package consumer
 
 import (
 	"context"
+	"crypto/tls"
 	"fmt"
 	"log"
+	"os"
 	"time"
 
 	"github.com/amirhf/credit-ledger/services/read-model/internal/metrics"
 	"github.com/amirhf/credit-ledger/services/read-model/internal/projection"
 	"github.com/google/uuid"
 	"github.com/segmentio/kafka-go"
+	"github.com/segmentio/kafka-go/sasl"
+	"github.com/segmentio/kafka-go/sasl/plain"
+	"github.com/segmentio/kafka-go/sasl/scram"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/propagation"
@@ -24,7 +29,7 @@ type Consumer struct {
 
 // NewConsumer creates a Kafka consumer for the ledger.entry.v1 topic
 func NewConsumer(brokers []string, projector *projection.Projector) *Consumer {
-	reader := kafka.NewReader(kafka.ReaderConfig{
+	config := kafka.ReaderConfig{
 		Brokers:        brokers,
 		Topic:          "ledger.entry.v1",
 		GroupID:        "read-model-projections",
@@ -32,7 +37,44 @@ func NewConsumer(brokers []string, projector *projection.Projector) *Consumer {
 		MaxBytes:       10e6, // 10MB
 		CommitInterval: time.Second,
 		StartOffset:    kafka.FirstOffset, // Start from beginning for new consumers
-	})
+	}
+
+	// Add SASL authentication if credentials provided (for managed Kafka providers)
+	if username := os.Getenv("KAFKA_SASL_USERNAME"); username != "" {
+		password := os.Getenv("KAFKA_SASL_PASSWORD")
+		mechanismType := os.Getenv("KAFKA_SASL_MECHANISM") // "PLAIN" or "SCRAM-SHA-256"
+		if mechanismType == "" {
+			mechanismType = "PLAIN" // Default to PLAIN for Confluent Cloud
+		}
+
+		var mechanism sasl.Mechanism
+		var err error
+
+		switch mechanismType {
+		case "PLAIN":
+			log.Println("Configuring Kafka consumer SASL authentication with PLAIN")
+			mechanism = plain.Mechanism{
+				Username: username,
+				Password: password,
+			}
+		case "SCRAM-SHA-256":
+			log.Println("Configuring Kafka consumer SASL authentication with SCRAM-SHA-256")
+			mechanism, err = scram.Mechanism(scram.SHA256, username, password)
+			if err != nil {
+				log.Fatalf("Failed to create SCRAM mechanism: %v", err)
+			}
+		default:
+			log.Fatalf("Unsupported SASL mechanism: %s. Use PLAIN or SCRAM-SHA-256", mechanismType)
+		}
+
+		config.Dialer = &kafka.Dialer{
+			SASLMechanism: mechanism,
+			TLS:           &tls.Config{},
+		}
+		log.Printf("Kafka consumer SASL authentication configured successfully with %s", mechanismType)
+	}
+
+	reader := kafka.NewReader(config)
 
 	return &Consumer{
 		reader:    reader,

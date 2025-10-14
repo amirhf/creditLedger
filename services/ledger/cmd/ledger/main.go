@@ -13,7 +13,9 @@ import (
 
 	ledgerhttp "github.com/amirhf/credit-ledger/services/ledger/internal/http"
 	"github.com/amirhf/credit-ledger/services/ledger/internal/outbox"
+	"github.com/amirhf/credit-ledger/services/ledger/internal/store"
 	"github.com/amirhf/credit-ledger/services/ledger/internal/telemetry"
+	"github.com/amirhf/credit-ledger/services/common/migrate"
 	"github.com/go-chi/chi/v5"
 	_ "github.com/lib/pq"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
@@ -57,6 +59,11 @@ func main() {
 	}
 	log.Println("Connected to database")
 
+	// Run database migrations
+	if err := migrate.RunMigrations(db, store.MigrationsFS, "ledger"); err != nil {
+		log.Fatalf("Failed to run migrations: %v", err)
+	}
+
 	// Get Kafka brokers from environment
 	kafkaBrokers := os.Getenv("KAFKA_BROKERS")
 	if kafkaBrokers == "" {
@@ -98,7 +105,21 @@ func main() {
 		)
 	})
 	
-	r.Get("/healthz", func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(http.StatusOK) })
+	// Health endpoints
+	r.Get("/healthz", func(w http.ResponseWriter, r *http.Request) { 
+		w.WriteHeader(http.StatusOK) 
+		w.Write([]byte("OK"))
+	})
+	r.Get("/ready", func(w http.ResponseWriter, r *http.Request) {
+		// Check database connection
+		if err := db.Ping(); err != nil {
+			w.WriteHeader(http.StatusServiceUnavailable)
+			w.Write([]byte("Database not ready"))
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte("Ready"))
+	})
 	r.Handle("/metrics", promhttp.Handler())
 	r.Post("/v1/entries", handler.CreateEntry)
 	r.Post("/v1/entries/{id}/void", handler.VoidEntry)

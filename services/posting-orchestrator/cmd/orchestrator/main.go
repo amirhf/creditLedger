@@ -15,7 +15,9 @@ import (
 	orchestratorhttp "github.com/amirhf/credit-ledger/services/posting-orchestrator/internal/http"
 	"github.com/amirhf/credit-ledger/services/posting-orchestrator/internal/idem"
 	"github.com/amirhf/credit-ledger/services/posting-orchestrator/internal/outbox"
+	"github.com/amirhf/credit-ledger/services/posting-orchestrator/internal/store"
 	"github.com/amirhf/credit-ledger/services/posting-orchestrator/internal/telemetry"
+	"github.com/amirhf/credit-ledger/services/common/migrate"
 	"github.com/go-chi/chi/v5"
 	_ "github.com/lib/pq"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
@@ -58,6 +60,11 @@ func main() {
 		log.Fatalf("Failed to ping database: %v", err)
 	}
 	log.Println("Connected to database")
+
+	// Run database migrations
+	if err := migrate.RunMigrations(db, store.MigrationsFS, "orchestrator"); err != nil {
+		log.Fatalf("Failed to run migrations: %v", err)
+	}
 
 	// Get Redis URL from environment
 	redisURL := os.Getenv("REDIS_URL")
@@ -123,7 +130,21 @@ func main() {
 		)
 	})
 	
-	r.Get("/healthz", func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(http.StatusOK) })
+	// Health endpoints
+	r.Get("/healthz", func(w http.ResponseWriter, r *http.Request) { 
+		w.WriteHeader(http.StatusOK) 
+		w.Write([]byte("OK"))
+	})
+	r.Get("/ready", func(w http.ResponseWriter, r *http.Request) {
+		// Check database connection
+		if err := db.Ping(); err != nil {
+			w.WriteHeader(http.StatusServiceUnavailable)
+			w.Write([]byte("Database not ready"))
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte("Ready"))
+	})
 	r.Handle("/metrics", promhttp.Handler())
 	r.Post("/v1/transfers", handler.CreateTransfer)
 	r.Get("/v1/transfers/{id}", handler.GetTransfer)

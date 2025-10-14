@@ -1,0 +1,62 @@
+# Git
+.git/
+.gitignore
+.github/
+
+# Documentation
+*.md
+README*
+docs/
+design.md
+DAY*.md
+SAGA*.md
+DEPLOYMENT*.md
+GATEWAY*.md
+QUICKSTART*.md
+
+# Tests (keep tests/ for go.work but exclude test files)
+*_test.go
+**/*_test.go
+**/testdata/
+*.test.ts
+*.spec.ts
+
+# Scripts
+*.ps1
+*.sh
+test*.ps1
+start*.ps1
+restart*.ps1
+generate*.ps1
+
+# IDE & Editor files
+.idea/
+.vscode/
+*.swp
+*.swo
+*.swn
+.DS_Store
+Thumbs.db
+
+# Build artifacts
+bin/
+dist/
+*.exe
+node_modules/
+
+# Environment files
+.env
+.env.*
+!.env.example
+
+# Docker
+docker-compose*.yml
+Dockerfile*
+.dockerignore
+deploy/
+
+# Misc
+Postman*.json
+*.http
+Makefile
+make.ps1

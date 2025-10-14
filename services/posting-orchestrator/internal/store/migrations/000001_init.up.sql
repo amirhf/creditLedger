@@ -10,7 +10,16 @@ CREATE TABLE IF NOT EXISTS transfers (
     entry_id UUID,
     failure_reason TEXT,
     created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-    updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    -- SAGA state management columns
+    state TEXT NOT NULL DEFAULT 'INITIATED' CHECK (state IN ('INITIATED', 'LEDGER_CALLED', 'RECOVERING', 'COMPENSATING', 'COMPENSATED', 'COMPLETED', 'FAILED')),
+    ledger_call_at TIMESTAMPTZ,
+    ledger_entry_id UUID,
+    ledger_response JSONB,
+    compensation_attempts INT NOT NULL DEFAULT 0,
+    compensated_at TIMESTAMPTZ,
+    recovery_attempts INT NOT NULL DEFAULT 0,
+    last_recovery_at TIMESTAMPTZ
 );
 
 -- Outbox table for transactional event publishing
@@ -28,5 +37,7 @@ CREATE TABLE IF NOT EXISTS outbox (
 -- Indexes
 CREATE INDEX IF NOT EXISTS idx_transfers_idempotency_key ON transfers(idempotency_key);
 CREATE INDEX IF NOT EXISTS idx_transfers_status ON transfers(status);
+CREATE INDEX IF NOT EXISTS idx_transfers_state ON transfers(state);
 CREATE INDEX IF NOT EXISTS idx_transfers_created_at ON transfers(created_at);
+CREATE INDEX IF NOT EXISTS idx_transfers_stale ON transfers(state, ledger_call_at, recovery_attempts) WHERE state IN ('LEDGER_CALLED', 'RECOVERING');
 CREATE INDEX IF NOT EXISTS idx_outbox_unsent ON outbox(created_at) WHERE sent_at IS NULL;

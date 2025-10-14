@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"database/sql"
 	"log"
 	"net/http"
 	"os"
@@ -13,9 +14,12 @@ import (
 	"github.com/amirhf/credit-ledger/services/read-model/internal/consumer"
 	readmodelhttp "github.com/amirhf/credit-ledger/services/read-model/internal/http"
 	"github.com/amirhf/credit-ledger/services/read-model/internal/projection"
+	"github.com/amirhf/credit-ledger/services/read-model/internal/store"
 	"github.com/amirhf/credit-ledger/services/read-model/internal/telemetry"
+	"github.com/amirhf/credit-ledger/services/common/migrate"
 	"github.com/go-chi/chi/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
+	_ "github.com/lib/pq"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
 )
@@ -55,7 +59,17 @@ func main() {
 		port = "7104"
 	}
 
-	// Connect to database
+	// Run database migrations first (using database/sql)
+	db, err := sql.Open("postgres", dbURL)
+	if err != nil {
+		log.Fatalf("Failed to connect for migrations: %v", err)
+	}
+	if err := migrate.RunMigrations(db, store.MigrationsFS, "readmodel"); err != nil {
+		log.Fatalf("Failed to run migrations: %v", err)
+	}
+	db.Close()
+
+	// Connect to database using pgxpool for application use
 	dbPool, err := pgxpool.New(ctx, dbURL)
 	if err != nil {
 		log.Fatalf("Failed to connect to database: %v", err)
@@ -96,8 +110,20 @@ func main() {
 		)
 	})
 	
+	// Health endpoints
 	r.Get("/healthz", func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
+		w.Write([]byte("OK"))
+	})
+	r.Get("/ready", func(w http.ResponseWriter, r *http.Request) {
+		// Check database connection
+		if err := dbPool.Ping(ctx); err != nil {
+			w.WriteHeader(http.StatusServiceUnavailable)
+			w.Write([]byte("Database not ready"))
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte("Ready"))
 	})
 	r.Handle("/metrics", promhttp.Handler())
 

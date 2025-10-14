@@ -1,0 +1,30 @@
+# Dependencies
+node_modules/
+
+# Git
+.git
+.gitignore
+
+# Documentation
+*.md
+README*
+
+# Tests
+**/*.test.ts
+**/*.spec.ts
+test/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Build artifacts
+dist/
+
+# Misc
+.DS_Store
+Thumbs.db
+npm-debug.log
+yarn-error.log

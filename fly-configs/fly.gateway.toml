@@ -1,0 +1,53 @@
+app = "creditledger-gateway-staging"
+primary_region = "ord"
+
+[build]
+  image = "ghcr.io/amirhf/creditledger-gateway:staging"
+
+[env]
+  SERVICE_NAME = "gateway"
+  PORT = "4000"
+  ENVIRONMENT = "staging"
+  NODE_ENV = "production"
+  # Gateway needs to know about backend services
+  ACCOUNTS_SERVICE_URL = "http://creditledger-accounts-staging.internal:8080"
+  ORCHESTRATOR_SERVICE_URL = "http://creditledger-orchestrator-staging.internal:8080"
+  READMODEL_SERVICE_URL = "http://creditledger-readmodel-staging.internal:8080"
+  # Disable telemetry for now to avoid startup issues
+  OTEL_SDK_DISABLED = "true"
+
+[http_service]
+  internal_port = 4000
+  force_https = true
+  auto_stop_machines = "stop"
+  auto_start_machines = true
+  min_machines_running = 1
+
+  [[http_service.checks]]
+    grace_period = "10s"
+    interval = "30s"
+    method = "GET"
+    timeout = "5s"
+    path = "/healthz"
+
+[[services]]
+  protocol = "tcp"
+  internal_port = 4000
+
+  [[services.ports]]
+    port = 80
+    handlers = ["http"]
+
+  [[services.ports]]
+    port = 443
+    handlers = ["http", "tls"]
+
+  [services.concurrency]
+    type = "connections"
+    hard_limit = 200
+    soft_limit = 150
+
+[[vm]]
+  memory = "512mb"
+  cpu_kind = "shared"
+  cpus = 1

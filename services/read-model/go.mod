@@ -4,9 +4,12 @@ go 1.24
 
 require (
 	github.com/amirhf/credit-ledger/proto v0.0.0
+	github.com/amirhf/credit-ledger/services/common v0.0.0
 	github.com/go-chi/chi/v5 v5.1.0
+	github.com/golang-migrate/migrate/v4 v4.17.0
 	github.com/google/uuid v1.6.0
 	github.com/jackc/pgx/v5 v5.5.5
+	github.com/lib/pq v1.10.9
 	github.com/prometheus/client_golang v1.19.1
 	github.com/segmentio/kafka-go v0.4.47
 	go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp v0.46.1
@@ -34,4 +37,7 @@ require (
 	golang.org/x/text v0.14.0 // indirect
 )
 
-replace github.com/amirhf/credit-ledger/proto => ../../proto
+replace (
+	github.com/amirhf/credit-ledger/proto => ../../proto
+	github.com/amirhf/credit-ledger/services/common => ../common
+)
