@@ -1,22 +1,25 @@
 # Build stage
 FROM golang:1.24-alpine AS builder
 
+# Install git for go mod tidy
+RUN apk add --no-cache git
+
 WORKDIR /build
 
-# Copy Go workspace files
-COPY ../../go.work ../../go.work.sum ./
+# Copy proto and common modules to expected locations
+WORKDIR /
+COPY proto ./proto
+COPY services/common ./common
 
-# Copy proto module (needed for builds)
-COPY ../../proto ../proto
+# Set working directory for service
+WORKDIR /build
 
 # Copy service files
-COPY go.mod go.sum ./
-RUN go mod download
+COPY services/posting-orchestrator/ .
 
-COPY . .
-
-# Build binary with optimizations
-RUN CGO_ENABLED=0 GOOS=linux go build \
+# Download dependencies and build
+RUN go mod tidy && \
+    CGO_ENABLED=0 GOOS=linux go build \
     -ldflags="-w -s" \
     -a -installsuffix cgo \
     -o /build/bin/orchestrator \

@@ -4,14 +4,14 @@ FROM node:20-alpine AS builder
 WORKDIR /build
 
 # Copy package files
-COPY services/gateway/package.json services/gateway/package-lock.json ./
+COPY package.json package-lock.json ./
 
 # Install ALL dependencies (needed for build)
 RUN npm ci && \
     npm cache clean --force
 
 # Copy source code
-COPY services/gateway/ .
+COPY . .
 
 # Build TypeScript
 RUN npm run build
@@ -25,7 +25,7 @@ RUN apk --no-cache add curl
 WORKDIR /app
 
 # Copy package files for production install
-COPY services/gateway/package.json services/gateway/package-lock.json ./
+COPY package.json package-lock.json ./
 
 # Install ONLY production dependencies
 RUN npm ci --omit=dev && \
