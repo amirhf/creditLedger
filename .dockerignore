@@ -7,7 +7,7 @@
 *.md
 README*
 docs/
-design.md
+planning/design.md
 DAY*.md
 SAGA*.md
 DEPLOYMENT*.md
