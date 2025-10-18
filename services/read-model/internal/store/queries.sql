@@ -53,3 +53,39 @@ ON CONFLICT (event_id) DO NOTHING;
 -- name: CleanupOldEvents :exec
 DELETE FROM event_dedup
 WHERE processed_at < $1;
+
+-- Transfer Queries
+
+-- name: CreateTransfer :exec
+INSERT INTO transfers (id, from_account_id, to_account_id, amount_minor, currency, status, idempotency_key, created_at, updated_at)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, now())
+ON CONFLICT (id) DO NOTHING;
+
+-- name: UpdateTransferStatus :exec
+UPDATE transfers
+SET status = $2, updated_at = now()
+WHERE id = $1;
+
+-- name: GetTransfer :one
+SELECT id, from_account_id, to_account_id, amount_minor, currency, status, idempotency_key, created_at, updated_at
+FROM transfers
+WHERE id = $1;
+
+-- name: ListTransfers :many
+SELECT id, from_account_id, to_account_id, amount_minor, currency, status, idempotency_key, created_at, updated_at
+FROM transfers
+WHERE 
+  (sqlc.narg('from_account_id')::uuid IS NULL OR from_account_id = sqlc.narg('from_account_id')) AND
+  (sqlc.narg('to_account_id')::uuid IS NULL OR to_account_id = sqlc.narg('to_account_id')) AND
+  (sqlc.narg('status')::text IS NULL OR status = sqlc.narg('status')) AND
+  (sqlc.narg('currency')::text IS NULL OR currency = sqlc.narg('currency'))
+ORDER BY created_at DESC
+LIMIT sqlc.arg('limit') OFFSET sqlc.arg('offset');
+
+-- name: CountTransfers :one
+SELECT COUNT(*) FROM transfers
+WHERE 
+  (sqlc.narg('from_account_id')::uuid IS NULL OR from_account_id = sqlc.narg('from_account_id')) AND
+  (sqlc.narg('to_account_id')::uuid IS NULL OR to_account_id = sqlc.narg('to_account_id')) AND
+  (sqlc.narg('status')::text IS NULL OR status = sqlc.narg('status')) AND
+  (sqlc.narg('currency')::text IS NULL OR currency = sqlc.narg('currency'));

@@ -110,6 +110,7 @@ func (r *Relay) publishEvent(ctx context.Context, qtx *store.Queries, event stor
 		headersMap[k] = fmt.Sprintf("%v", v)
 	}
 	headersMap["event_id"] = event.ID.String()
+	headersMap["event_type"] = event.EventType
 	headersMap["aggregate_id"] = event.AggregateID.String()
 	headersMap["aggregate_type"] = event.AggregateType
 

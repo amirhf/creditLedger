@@ -28,4 +28,18 @@ export class ReadModelService {
     const url = `/v1/accounts/${accountId}/statements${params.toString() ? '?' + params.toString() : ''}`;
     return this.httpClient.get<GetStatementsResponse>(url);
   }
+
+  async listTransfers(query: any): Promise<any> {
+    this.logger.debug(`Listing transfers with filters: ${JSON.stringify(query)}`);
+    const params = new URLSearchParams();
+    if (query.from_account_id) params.append('from_account_id', query.from_account_id);
+    if (query.to_account_id) params.append('to_account_id', query.to_account_id);
+    if (query.status) params.append('status', query.status);
+    if (query.currency) params.append('currency', query.currency);
+    if (query.limit) params.append('limit', query.limit.toString());
+    if (query.offset) params.append('offset', query.offset.toString());
+    
+    const url = `/v1/transfers${params.toString() ? '?' + params.toString() : ''}`;
+    return this.httpClient.get<any>(url);
+  }
 }

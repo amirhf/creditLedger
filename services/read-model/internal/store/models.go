@@ -28,3 +28,15 @@ type Statement struct {
 	Side        string
 	Ts          pgtype.Timestamptz
 }
+
+type Transfer struct {
+	ID             pgtype.UUID
+	FromAccountID  pgtype.UUID
+	ToAccountID    pgtype.UUID
+	AmountMinor    int64
+	Currency       string
+	Status         string
+	IdempotencyKey string
+	CreatedAt      pgtype.Timestamptz
+	UpdatedAt      pgtype.Timestamptz
+}

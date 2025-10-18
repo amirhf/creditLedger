@@ -21,6 +21,34 @@ func (q *Queries) CleanupOldEvents(ctx context.Context, processedAt pgtype.Times
 	return err
 }
 
+const countTransfers = `-- name: CountTransfers :one
+SELECT COUNT(*) FROM transfers
+WHERE 
+  ($1::uuid IS NULL OR from_account_id = $1) AND
+  ($2::uuid IS NULL OR to_account_id = $2) AND
+  ($3::text IS NULL OR status = $3) AND
+  ($4::text IS NULL OR currency = $4)
+`
+
+type CountTransfersParams struct {
+	FromAccountID pgtype.UUID
+	ToAccountID   pgtype.UUID
+	Status        pgtype.Text
+	Currency      pgtype.Text
+}
+
+func (q *Queries) CountTransfers(ctx context.Context, arg CountTransfersParams) (int64, error) {
+	row := q.db.QueryRow(ctx, countTransfers,
+		arg.FromAccountID,
+		arg.ToAccountID,
+		arg.Status,
+		arg.Currency,
+	)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
+
 const createStatement = `-- name: CreateStatement :exec
 
 INSERT INTO statements (account_id, entry_id, amount_minor, side, ts)
@@ -43,6 +71,39 @@ func (q *Queries) CreateStatement(ctx context.Context, arg CreateStatementParams
 		arg.AmountMinor,
 		arg.Side,
 		arg.Ts,
+	)
+	return err
+}
+
+const createTransfer = `-- name: CreateTransfer :exec
+
+INSERT INTO transfers (id, from_account_id, to_account_id, amount_minor, currency, status, idempotency_key, created_at, updated_at)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, now())
+ON CONFLICT (id) DO NOTHING
+`
+
+type CreateTransferParams struct {
+	ID             pgtype.UUID
+	FromAccountID  pgtype.UUID
+	ToAccountID    pgtype.UUID
+	AmountMinor    int64
+	Currency       string
+	Status         string
+	IdempotencyKey string
+	CreatedAt      pgtype.Timestamptz
+}
+
+// Transfer Queries
+func (q *Queries) CreateTransfer(ctx context.Context, arg CreateTransferParams) error {
+	_, err := q.db.Exec(ctx, createTransfer,
+		arg.ID,
+		arg.FromAccountID,
+		arg.ToAccountID,
+		arg.AmountMinor,
+		arg.Currency,
+		arg.Status,
+		arg.IdempotencyKey,
+		arg.CreatedAt,
 	)
 	return err
 }
@@ -149,6 +210,29 @@ func (q *Queries) GetStatementsByAccount(ctx context.Context, arg GetStatementsB
 	return items, nil
 }
 
+const getTransfer = `-- name: GetTransfer :one
+SELECT id, from_account_id, to_account_id, amount_minor, currency, status, idempotency_key, created_at, updated_at
+FROM transfers
+WHERE id = $1
+`
+
+func (q *Queries) GetTransfer(ctx context.Context, id pgtype.UUID) (Transfer, error) {
+	row := q.db.QueryRow(ctx, getTransfer, id)
+	var i Transfer
+	err := row.Scan(
+		&i.ID,
+		&i.FromAccountID,
+		&i.ToAccountID,
+		&i.AmountMinor,
+		&i.Currency,
+		&i.Status,
+		&i.IdempotencyKey,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
+}
+
 const isEventProcessed = `-- name: IsEventProcessed :one
 
 SELECT EXISTS(SELECT 1 FROM event_dedup WHERE event_id = $1)
@@ -160,6 +244,64 @@ func (q *Queries) IsEventProcessed(ctx context.Context, eventID pgtype.UUID) (bo
 	var exists bool
 	err := row.Scan(&exists)
 	return exists, err
+}
+
+const listTransfers = `-- name: ListTransfers :many
+SELECT id, from_account_id, to_account_id, amount_minor, currency, status, idempotency_key, created_at, updated_at
+FROM transfers
+WHERE 
+  ($1::uuid IS NULL OR from_account_id = $1) AND
+  ($2::uuid IS NULL OR to_account_id = $2) AND
+  ($3::text IS NULL OR status = $3) AND
+  ($4::text IS NULL OR currency = $4)
+ORDER BY created_at DESC
+LIMIT $6 OFFSET $5
+`
+
+type ListTransfersParams struct {
+	FromAccountID pgtype.UUID
+	ToAccountID   pgtype.UUID
+	Status        pgtype.Text
+	Currency      pgtype.Text
+	Offset        int32
+	Limit         int32
+}
+
+func (q *Queries) ListTransfers(ctx context.Context, arg ListTransfersParams) ([]Transfer, error) {
+	rows, err := q.db.Query(ctx, listTransfers,
+		arg.FromAccountID,
+		arg.ToAccountID,
+		arg.Status,
+		arg.Currency,
+		arg.Offset,
+		arg.Limit,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []Transfer
+	for rows.Next() {
+		var i Transfer
+		if err := rows.Scan(
+			&i.ID,
+			&i.FromAccountID,
+			&i.ToAccountID,
+			&i.AmountMinor,
+			&i.Currency,
+			&i.Status,
+			&i.IdempotencyKey,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
 }
 
 const markEventProcessed = `-- name: MarkEventProcessed :exec
@@ -189,6 +331,22 @@ type SetBalanceParams struct {
 
 func (q *Queries) SetBalance(ctx context.Context, arg SetBalanceParams) error {
 	_, err := q.db.Exec(ctx, setBalance, arg.AccountID, arg.Currency, arg.BalanceMinor)
+	return err
+}
+
+const updateTransferStatus = `-- name: UpdateTransferStatus :exec
+UPDATE transfers
+SET status = $2, updated_at = now()
+WHERE id = $1
+`
+
+type UpdateTransferStatusParams struct {
+	ID     pgtype.UUID
+	Status string
+}
+
+func (q *Queries) UpdateTransferStatus(ctx context.Context, arg UpdateTransferStatusParams) error {
+	_, err := q.db.Exec(ctx, updateTransferStatus, arg.ID, arg.Status)
 	return err
 }
 

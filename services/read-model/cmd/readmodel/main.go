@@ -85,16 +85,25 @@ func main() {
 	// Create projector
 	projector := projection.NewProjector(dbPool)
 
-	// Create Kafka consumer
+	// Create Kafka consumers
 	kafkaConsumer := consumer.NewConsumer(brokers, projector)
+	transferConsumer := consumer.NewTransferConsumer(brokers, projector)
 
-	// Start Kafka consumer in background
+	// Start Kafka consumers in background
 	consumerCtx, cancelConsumer := context.WithCancel(ctx)
 	defer cancelConsumer()
 
+	// Start entry consumer
 	go func() {
 		if err := kafkaConsumer.Start(consumerCtx); err != nil {
-			log.Printf("Kafka consumer error: %v", err)
+			log.Printf("Kafka entry consumer error: %v", err)
+		}
+	}()
+
+	// Start transfer consumer
+	go func() {
+		if err := transferConsumer.Start(consumerCtx); err != nil {
+			log.Printf("Kafka transfer consumer error: %v", err)
 		}
 	}()
 
@@ -131,6 +140,7 @@ func main() {
 	handler := readmodelhttp.NewHandler(dbPool)
 	r.Get("/v1/accounts/{id}/balance", handler.GetBalance)
 	r.Get("/v1/accounts/{id}/statements", handler.GetStatements)
+	r.Get("/v1/transfers", handler.ListTransfers)
 
 	// Start HTTP server
 	server := &http.Server{

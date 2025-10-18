@@ -1,12 +1,16 @@
 import { Controller, Post, Get, Body, Param, Query, HttpCode, HttpStatus, BadRequestException } from '@nestjs/common';
 import { ApiTags, ApiOperation, ApiResponse, ApiBody, ApiParam, ApiQuery } from '@nestjs/swagger';
 import { OrchestratorService } from './services/orchestrator.service';
+import { ReadModelService } from './services/readmodel.service';
 import { CreateTransferSchema, CreateTransferDto } from './schemas/transfers.schemas';
 
 @ApiTags('transfers')
 @Controller('transfers')
 export class TransfersController {
-  constructor(private readonly orchestratorService: OrchestratorService) {}
+  constructor(
+    private readonly orchestratorService: OrchestratorService,
+    private readonly readModelService: ReadModelService
+  ) {}
 
   @Post()
   @HttpCode(HttpStatus.ACCEPTED)
@@ -108,7 +112,7 @@ export class TransfersController {
     }
   }})
   async listTransfers(@Query() query: any) {
-    return this.orchestratorService.listTransfers(query);
+    return this.readModelService.listTransfers(query);
   }
 
   @Get(':id')

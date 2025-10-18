@@ -53,6 +53,27 @@ type StatementsResponse struct {
 	Statements []StatementEntry `json:"statements"`
 }
 
+// TransferResponse represents a single transfer
+type TransferResponse struct {
+	ID             string `json:"id"`
+	FromAccountID  string `json:"from_account_id"`
+	ToAccountID    string `json:"to_account_id"`
+	AmountMinor    int64  `json:"amount_minor"`
+	Currency       string `json:"currency"`
+	Status         string `json:"status"`
+	IdempotencyKey string `json:"idempotency_key"`
+	CreatedAt      string `json:"created_at"`
+	UpdatedAt      string `json:"updated_at"`
+}
+
+// TransfersListResponse represents the list of transfers
+type TransfersListResponse struct {
+	Transfers []TransferResponse `json:"transfers"`
+	Total     int64              `json:"total"`
+	Limit     int32              `json:"limit"`
+	Offset    int32              `json:"offset"`
+}
+
 // GetBalance handles GET /v1/accounts/:id/balance
 func (h *Handler) GetBalance(w http.ResponseWriter, r *http.Request) {
 	start := time.Now()
@@ -219,6 +240,135 @@ func (h *Handler) GetStatements(w http.ResponseWriter, r *http.Request) {
 	metrics.StatementQueriesTotal.WithLabelValues("success").Inc()
 	metrics.QueryDuration.WithLabelValues("statements", "success").Observe(time.Since(start).Seconds())
 
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	json.NewEncoder(w).Encode(resp)
+}
+
+// ListTransfers handles GET /v1/transfers
+func (h *Handler) ListTransfers(w http.ResponseWriter, r *http.Request) {
+	start := time.Now()
+	
+	// Parse query parameters
+	fromAccountIDStr := r.URL.Query().Get("from_account_id")
+	toAccountIDStr := r.URL.Query().Get("to_account_id")
+	status := r.URL.Query().Get("status")
+	currency := r.URL.Query().Get("currency")
+	
+	// Parse pagination
+	limit := int32(20)
+	offset := int32(0)
+	
+	if limitStr := r.URL.Query().Get("limit"); limitStr != "" {
+		var parsedLimit int
+		if _, err := fmt.Sscanf(limitStr, "%d", &parsedLimit); err == nil && parsedLimit > 0 && parsedLimit <= 100 {
+			limit = int32(parsedLimit)
+		}
+	}
+	
+	if offsetStr := r.URL.Query().Get("offset"); offsetStr != "" {
+		var parsedOffset int
+		if _, err := fmt.Sscanf(offsetStr, "%d", &parsedOffset); err == nil && parsedOffset >= 0 {
+			offset = int32(parsedOffset)
+		}
+	}
+	
+	// Parse UUIDs
+	var fromAccountID, toAccountID pgtype.UUID
+	
+	if fromAccountIDStr != "" {
+		parsedUUID, err := uuid.Parse(fromAccountIDStr)
+		if err != nil {
+			http.Error(w, `{"error":"invalid from_account_id"}`, http.StatusBadRequest)
+			return
+		}
+		if err := fromAccountID.Scan(parsedUUID.String()); err != nil {
+			http.Error(w, `{"error":"invalid from_account_id"}`, http.StatusBadRequest)
+			return
+		}
+	}
+	
+	if toAccountIDStr != "" {
+		parsedUUID, err := uuid.Parse(toAccountIDStr)
+		if err != nil {
+			http.Error(w, `{"error":"invalid to_account_id"}`, http.StatusBadRequest)
+			return
+		}
+		if err := toAccountID.Scan(parsedUUID.String()); err != nil {
+			http.Error(w, `{"error":"invalid to_account_id"}`, http.StatusBadRequest)
+			return
+		}
+	}
+	
+	// Build query params
+	var statusText, currencyText pgtype.Text
+	if status != "" {
+		statusText = pgtype.Text{String: status, Valid: true}
+	}
+	if currency != "" {
+		currencyText = pgtype.Text{String: currency, Valid: true}
+	}
+	
+	// Query transfers
+	transfers, err := h.queries.ListTransfers(r.Context(), store.ListTransfersParams{
+		FromAccountID: fromAccountID,
+		ToAccountID:   toAccountID,
+		Status:        statusText,
+		Currency:      currencyText,
+		Limit:         limit,
+		Offset:        offset,
+	})
+	
+	if err != nil {
+		log.Printf("Error listing transfers: %v", err)
+		metrics.QueryDuration.WithLabelValues("transfers", "error").Observe(time.Since(start).Seconds())
+		http.Error(w, `{"error":"internal server error"}`, http.StatusInternalServerError)
+		return
+	}
+	
+	// Get total count
+	total, err := h.queries.CountTransfers(r.Context(), store.CountTransfersParams{
+		FromAccountID: fromAccountID,
+		ToAccountID:   toAccountID,
+		Status:        statusText,
+		Currency:      currencyText,
+	})
+	
+	if err != nil {
+		log.Printf("Error counting transfers: %v", err)
+		total = 0
+	}
+	
+	// Convert to response format
+	transferResponses := make([]TransferResponse, len(transfers))
+	for i, t := range transfers {
+		var id, fromAccID, toAccID uuid.UUID
+		copy(id[:], t.ID.Bytes[:])
+		copy(fromAccID[:], t.FromAccountID.Bytes[:])
+		copy(toAccID[:], t.ToAccountID.Bytes[:])
+		
+		transferResponses[i] = TransferResponse{
+			ID:             id.String(),
+			FromAccountID:  fromAccID.String(),
+			ToAccountID:    toAccID.String(),
+			AmountMinor:    t.AmountMinor,
+			Currency:       t.Currency,
+			Status:         t.Status,
+			IdempotencyKey: t.IdempotencyKey,
+			CreatedAt:      t.CreatedAt.Time.Format(time.RFC3339),
+			UpdatedAt:      t.UpdatedAt.Time.Format(time.RFC3339),
+		}
+	}
+	
+	resp := TransfersListResponse{
+		Transfers: transferResponses,
+		Total:     total,
+		Limit:     limit,
+		Offset:    offset,
+	}
+	
+	metrics.QueryDuration.WithLabelValues("transfers", "success").Observe(time.Since(start).Seconds())
+	
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
 	json.NewEncoder(w).Encode(resp)

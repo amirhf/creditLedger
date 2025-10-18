@@ -156,6 +156,7 @@ services:
       DATABASE_URL: postgres://ledger:${POSTGRES_PASSWORD:-ledgerpw}@postgres-orchestrator:5432/${POSTGRES_DB_ORCHESTRATOR:-orchestrator}?sslmode=disable
       REDIS_URL: redis://redis:6379
       LEDGER_URL: http://ledger-svc:7102
+      KAFKA_BROKERS: redpanda:9092
     depends_on:
       postgres-orchestrator:
         condition: service_healthy
