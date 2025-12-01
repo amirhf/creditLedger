@@ -1,7 +1,6 @@
-
 # Credit Ledger (Go + TS + Kafka + Postgres)
 
-> Event-driven, **double-entry** credit ledger with **transactional outbox**, **idempotent consumers**, replayable **CQRS** projections, and full **observability** (Jaeger + Grafana + Redpanda Console).
+> Production-ready **reference architecture** for high-volume financial credits and balances: SaaS credits, marketplace wallets, usage-based billing, and loyalty points.
 
 [![Go](https://img.shields.io/badge/Go-1.22+-blue)](#)
 [![TypeScript](https://img.shields.io/badge/TypeScript-5.x-blue)](#)
@@ -11,22 +10,86 @@
 
 **Live demo:** [https://creditledger-gateway-staging.fly.dev/api](https://creditledger-gateway-staging.fly.dev/api)
 
-**Repo:** [https://github.com/amirhf/creditLedger](https://github.com/amirhf/creditLedger)
+---
+
+**Credit Ledger** demonstrates event-driven design, double-entry thinking, transactional outbox, CQRS projections, and full observability in a microservices environment.
+
+### Who this is for
+
+- **Fintech / SaaS teams** hitting limits with a single `credits_remaining` field.
+- **Marketplaces** needing auditable wallets / balances.
+- **Engineers** wanting a template for event-driven, double-entry ledger design in Go.
+- **CTOs** evaluating architecture for credits/usage systems before a rewrite.
+
+## Why this exists
+
+Most SaaS and marketplaces start with a `credits_remaining` column or a spreadsheet.
+That works… until:
+
+- Support tickets spike (“your system ate my credits”).
+- Balances don’t match between dashboards, DB, and invoices.
+- Nobody can explain why a customer has 37 credits instead of 41.
+- Product wants new bundles/promos and everyone is afraid to touch the code.
+
+**Credit Ledger** shows how to rebuild that into a proper ledger with:
+- Immutable history
+- Double-entry style thinking
+- Replayable projections
+- Clear auditability for disputes
+
+## What you can reuse from this repo
+
+- A simple but realistic **domain model** for accounts, credit types, ledger entries, and balances.
+- A **transactional outbox** pattern to avoid dual-write hazards.
+- **Idempotent consumers** feeding CQRS read models.
+- **Observability wiring**: traces (Jaeger), metrics (Prometheus/Grafana), and Kafka/Redpanda topic inspection.
+- A Dockerized, `make up` **developer experience** for local demos and workshops.
 
 ---
 
-Infra: Redpanda (Kafka API) + Console, Postgres x3, Redis, Jaeger, Prometheus, Grafana.
+## Architecture at a glance
 
+```mermaid
+flowchart LR
+  Client --> GatewayAPI
+  GatewayAPI -->|HTTP commands| LedgerService
+  LedgerService -->|write + outbox| Postgres[(Ledger DB)]
+  LedgerService -->|outbox poller| Kafka[(Redpanda)]
+  Kafka --> ReadModelService
+  ReadModelService --> Projections[(Read DB)]
+  Projections --> GatewayAPI
+```
 
-Services (Go): accounts, ledger, posting-orchestrator, read-model
-Gateway (TS/Nest): REST API and OpenAPI docs.
+For the rationale behind key decisions, see [`docs/adr`](./docs/adr).
 
+## Deep dive article
 
-## Useful URLs
-- Redpanda Console: http://localhost:8080
-- Grafana: http://localhost:3000 (admin/admin)
-- Jaeger: http://localhost:16686
-- Gateway API: http://localhost:4000
+For the story behind this architecture (and when to use it), see:  
+[From Spreadsheet Chaos to Reliable Credits](https://medium.com/@amirhosseinfirouzmanesh/from-spreadsheet-chaos-to-reliable-credits-ca8fe19fbdb7).
+
+---
+
+## Example use cases
+
+- [SaaS subscription credits](docs/use-cases/saas-subscription-credits.md)
+- [Marketplace listing credits](docs/use-cases/marketplace-listing-credits.md)
+- [Wallet & escrow balances](docs/use-cases/wallet-and-escrow.md)
+- [Loyalty / points systems](docs/use-cases/loyalty-and-points.md)
+
+## Performance (reference numbers)
+
+On a single `c5.large`-class VM (2 vCPU, 4 GB RAM), with Dockerized infra:
+
+- Sustains ~400 transfers/second (end-to-end HTTP → Kafka → projections).
+- p95 latency under 60 ms for single transfer.
+- Outbox consumer lag remains below 100 messages under load.
+
+See [`benchmarks/README.md`](./benchmarks/README.md) for methodology and raw results.
+
+> Curious how this compares to **TigerBeetle** or **Formance**?  
+> See [docs/comparison.md](docs/comparison.md).
+
+---
 
 ## Quickstart (local, one command)
 
@@ -92,8 +155,6 @@ curl -s -XPOST :4000/transfers \
 
 curl -s :4000/accounts/$B/balance | jq
 ```
-
-*Postman users:* import `Gateway-API.postman_collection.json` (if present) and run **Create → Transfer → Balance**.
 
 ---
 
