@@ -8,7 +8,7 @@
 [![Docker](https://img.shields.io/badge/Docker-Compose-success)](#)
 [![License](https://img.shields.io/badge/license-MIT-lightgrey)](#)
 
-**Live demo:** [https://creditledger-gateway-staging.fly.dev/api](https://creditledger-gateway-staging.fly.dev/api)
+**Live demo:** [ledger.amirhf-demos.info:4000/api](http://ledger.amirhf-demos.info:4000/api)
 
 ---
 
